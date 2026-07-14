@@ -1,19 +1,38 @@
-"""Thin async wrapper around TikTokApi.
+"""Async wrapper around TikTokApi with anti-blocking hardening.
 
-Isolates every library quirk (session creation, browser wiring, field access)
-behind three coroutines: ``get_video``, ``iter_comments``, ``iter_user_videos``.
-The rest of the codebase only ever sees plain ``dict`` payloads.
+Isolates every library quirk behind three coroutines — ``get_video``,
+``iter_comments``, ``iter_user_videos`` — that only ever hand back plain
+``dict`` payloads.
 
-TikTokApi drives a headless Chromium via Playwright. This environment ships
-Chromium at ``$PLAYWRIGHT_BROWSERS_PATH`` — do NOT call ``playwright install``.
+Anti-blocking strategy (personal scale — her + a few comp creators):
+  * **Warm pool, reused.** A small pool of TikTokApi sessions is created once and
+    reused across many requests. We never spin up a session per request — that's
+    both slow and a bot signature.
+  * **Coherent UA/fingerprint rotation at session boundaries.** Each pool
+    generation runs under one realistic desktop-Chrome fingerprint (UA + matching
+    viewport + locale, so nothing contradicts). We rotate to a fresh fingerprint
+    every time the pool is recycled — never a per-request UA swap, which would
+    mismatch the real browser fingerprint and look *more* botty.
+  * **Pacing + jitter** between requests, and **exponential backoff** on transient
+    errors / empty (blocked) payloads.
+  * **Recycling** after ``recycle_after`` requests: tear the pool down and rebuild
+    it with a new fingerprint + fresh msToken session, so long runs don't ride one
+    stale identity.
+
+TikTokApi drives a headless Chromium via Playwright. On this repo's dev sandbox
+Chromium is pre-installed at ``$PLAYWRIGHT_BROWSERS_PATH`` — do NOT run
+``playwright install``. On a normal machine TikTokApi downloads its own on first
+run (slow once).
 """
 
 from __future__ import annotations
 
+import asyncio
 import glob
 import os
+import random
 import re
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 from TikTokApi import TikTokApi
 
@@ -21,14 +40,66 @@ from TikTokApi import TikTokApi
 _VIDEO_ID_RE = re.compile(r"/video/(\d+)")
 
 
-def _preinstalled_chromium() -> Optional[str]:
-    """Find the pre-installed Chromium so Playwright doesn't try to download one.
+# ---------------------------------------------------------------------------
+# coherent browser fingerprints (UA must agree with viewport/locale/platform)
+# ---------------------------------------------------------------------------
+FINGERPRINTS: list[dict[str, Any]] = [
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "viewport": {"width": 1920, "height": 1080},
+        "locale": "en-US",
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "viewport": {"width": 1536, "height": 864},
+        "locale": "en-US",
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "viewport": {"width": 1440, "height": 900},
+        "locale": "en-US",
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "viewport": {"width": 1680, "height": 1050},
+        "locale": "en-GB",
+    },
+    {
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "viewport": {"width": 1600, "height": 900},
+        "locale": "en-US",
+    },
+]
 
-    This environment ships a Chromium build under $PLAYWRIGHT_BROWSERS_PATH that
-    may not match the version the freshly-pip-installed Playwright expects. We
-    point launch() at the existing binary via ``executable_path`` instead of
-    running ``playwright install``. Returns None if nothing is found (then the
-    library falls back to its own managed browser).
+
+def choose_fingerprint(rng: Optional[random.Random] = None) -> dict[str, Any]:
+    """Pick one coherent (user_agent, viewport, locale) fingerprint."""
+    r = rng or random
+    return dict(r.choice(FINGERPRINTS))
+
+
+def backoff_schedule(
+    max_retries: int, base: float = 2.0, cap: float = 16.0
+) -> list[float]:
+    """Deterministic backoff bases: base * 2**i, capped (jitter added at runtime).
+
+    e.g. max_retries=4 -> [2, 4, 8, 16]. Exposed as a pure function for testing.
+    """
+    return [min(base * (2 ** i), cap) for i in range(max_retries)]
+
+
+def _preinstalled_chromium() -> Optional[str]:
+    """Return a pre-installed Chromium path so Playwright doesn't download one.
+
+    The dev sandbox ships a Chromium build under $PLAYWRIGHT_BROWSERS_PATH that
+    may not match the pip-installed Playwright's expected version; we point
+    launch() at it via ``executable_path``. Returns None when nothing is found —
+    then TikTokApi uses its own managed browser (normal on a user's machine).
     """
     root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
     for pattern in (
@@ -53,7 +124,7 @@ def extract_video_id(url_or_id: str) -> str:
 
 
 class TikTokClient:
-    """Async context manager owning a TikTokApi session.
+    """Async context manager owning a warm, self-recycling TikTokApi pool.
 
     Usage:
         async with TikTokClient(ms_token=...) as client:
@@ -62,60 +133,155 @@ class TikTokClient:
                 ...
     """
 
-    def __init__(self, ms_token: Optional[str] = None, num_sessions: int = 1):
+    def __init__(
+        self,
+        ms_token: Optional[str] = None,
+        pool_size: int = 2,
+        min_delay: float = 2.0,
+        max_delay: float = 4.0,
+        recycle_after: int = 50,
+        max_retries: int = 4,
+        rng: Optional[random.Random] = None,
+    ):
         self._ms_token = ms_token
-        self._num_sessions = num_sessions
-        self._api: Optional[TikTokApi] = None
+        self._pool_size = max(1, pool_size)
+        self._min_delay = max(0.0, min_delay)
+        self._max_delay = max(self._min_delay, max_delay)
+        self._recycle_after = max(1, recycle_after)
+        self._max_retries = max(0, max_retries)
+        self._rng = rng or random.Random()
 
+        self._api: Optional[TikTokApi] = None
+        self._fingerprint: dict[str, Any] = {}
+        self._request_count = 0
+
+    # -- lifecycle ---------------------------------------------------------
     async def __aenter__(self) -> "TikTokClient":
+        await self._create_pool()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self._close_pool()
+
+    async def _create_pool(self) -> None:
+        self._fingerprint = choose_fingerprint(self._rng)
         self._api = TikTokApi()
         ms_tokens = [self._ms_token] if self._ms_token else None
         await self._api.create_sessions(
             ms_tokens=ms_tokens,
-            num_sessions=self._num_sessions,
+            num_sessions=self._pool_size,
             sleep_after=3,
             browser="chromium",
             headless=True,
             executable_path=_preinstalled_chromium(),
+            # one coherent fingerprint for this whole pool generation
+            context_options={
+                "user_agent": self._fingerprint["user_agent"],
+                "viewport": self._fingerprint["viewport"],
+                "locale": self._fingerprint["locale"],
+            },
         )
-        return self
 
-    async def __aexit__(self, *exc) -> None:
+    async def _close_pool(self) -> None:
         if self._api is not None:
-            await self._api.close_sessions()
-            self._api = None
+            try:
+                await self._api.close_sessions()
+            finally:
+                self._api = None
+
+    async def _recycle(self) -> None:
+        """Rebuild the pool under a fresh fingerprint (new session identity)."""
+        await self._close_pool()
+        await self._create_pool()
+        self._request_count = 0
 
     def _require_api(self) -> TikTokApi:
         if self._api is None:
             raise RuntimeError("TikTokClient used outside its async context")
         return self._api
 
+    # -- pacing / recycling gate ------------------------------------------
+    async def _before_request(self) -> None:
+        """Recycle at the generation boundary, then pace with jitter.
+
+        Called at a safe boundary (before any iterator is created), so recycling
+        never invalidates an in-flight paginator.
+        """
+        if self._request_count and self._request_count % self._recycle_after == 0:
+            await self._recycle()
+        if self._request_count > 0:  # no delay before the very first request
+            await asyncio.sleep(self._rng.uniform(self._min_delay, self._max_delay))
+        self._request_count += 1
+
+    async def _backoff(self, attempt: int) -> None:
+        bases = backoff_schedule(self._max_retries)
+        base = bases[attempt] if attempt < len(bases) else (bases[-1] if bases else 1.0)
+        await asyncio.sleep(base + self._rng.uniform(0, 1.0))
+
+    # -- fetch surface -----------------------------------------------------
     async def get_video(self, url_or_id: str) -> dict:
-        """Return the raw item dict for one video."""
-        api = self._require_api()
+        """Return the raw item dict for one video (retried with backoff)."""
         video_id = extract_video_id(url_or_id)
-        video = api.video(id=video_id)
-        info = await video.info()
-        return info if isinstance(info, dict) else {}
+        for attempt in range(self._max_retries + 1):
+            try:
+                await self._before_request()
+                video = self._require_api().video(id=video_id)
+                info = await video.info()
+                if isinstance(info, dict) and info:
+                    return info
+                raise RuntimeError("empty video payload (likely blocked)")
+            except Exception:
+                if attempt >= self._max_retries:
+                    raise
+                await self._backoff(attempt)
+        return {}
 
     async def iter_comments(
         self, url_or_id: str, count: int = 200
     ) -> AsyncIterator[dict]:
-        """Yield raw comment dicts for a video (paginated by the library)."""
-        api = self._require_api()
+        """Yield raw comment dicts for a video, deduped across retry restarts."""
         video_id = extract_video_id(url_or_id)
-        video = api.video(id=video_id)
-        async for comment in video.comments(count=count):
-            yield _as_dict(comment)
+        seen: set[str] = set()
+        for attempt in range(self._max_retries + 1):
+            try:
+                await self._before_request()
+                video = self._require_api().video(id=video_id)
+                async for comment in video.comments(count=count):
+                    d = _as_dict(comment)
+                    cid = d.get("cid") or d.get("id")
+                    if cid is not None and cid in seen:
+                        continue
+                    if cid is not None:
+                        seen.add(cid)
+                    yield d
+                return
+            except Exception:
+                if attempt >= self._max_retries:
+                    raise
+                await self._backoff(attempt)
 
     async def iter_user_videos(
         self, username: str, count: int = 30
     ) -> AsyncIterator[dict]:
-        """Yield raw item dicts for a creator's recent videos."""
-        api = self._require_api()
-        user = api.user(username=username)
-        async for video in user.videos(count=count):
-            yield _as_dict(video)
+        """Yield raw item dicts for a creator's recent videos (deduped on retry)."""
+        seen: set[str] = set()
+        for attempt in range(self._max_retries + 1):
+            try:
+                await self._before_request()
+                user = self._require_api().user(username=username)
+                async for video in user.videos(count=count):
+                    d = _as_dict(video)
+                    vid = d.get("id") or d.get("aweme_id")
+                    if vid is not None and vid in seen:
+                        continue
+                    if vid is not None:
+                        seen.add(vid)
+                    yield d
+                return
+            except Exception:
+                if attempt >= self._max_retries:
+                    raise
+                await self._backoff(attempt)
 
 
 def _as_dict(obj) -> dict:

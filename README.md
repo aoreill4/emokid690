@@ -43,6 +43,30 @@ without it TikTok bot-blocks most requests. Get it by logging in to tiktok.com
 as @emokid690, then DevTools → Application → Cookies → copy the `msToken` value
 into `.env`.
 
+### Windows (PowerShell)
+
+If you see `Python was not found` or `pip is not recognized`, Python isn't
+installed (the Store stub PowerShell points at is not real Python):
+
+1. Install Python from **python.org** (not the Microsoft Store — the Store build
+   causes exactly that PATH stub). In the installer, check
+   **"Add python.exe to PATH"**, then reopen PowerShell.
+2. Use the **`py` launcher** instead of `python`/`pip`:
+
+```powershell
+py -m pip install -r requirements.txt
+
+Copy-Item .env.example .env
+notepad .env            # paste your msToken after MS_TOKEN=  then save & close
+
+py src/loader.py --client emokid690 --video-url "https://www.tiktok.com/@emokid690/video/<id>"
+py src/query.py --client emokid690
+```
+
+Replace `<id>` with a real numeric video id (the long number at the end of a
+video's URL). The **first run is slow** — TikTokApi downloads a matching Chromium
+once. `Copy-Item` is PowerShell's `cp`.
+
 ## Run
 
 Vertical slice — one video and its comments:
@@ -56,6 +80,13 @@ Whole profile (recent videos, handle read from `clients.csv`):
 ```bash
 python src/loader.py --client emokid690 --all --max-videos 30
 ```
+
+The loader is paced to avoid bot-blocking: it reuses a small warm session pool,
+sleeps (with jitter) between requests, retries with backoff, and rotates a
+coherent browser fingerprint each time it recycles the pool. Tune via
+`--pool-size`, `--min-delay`, `--max-delay`, `--recycle-after` if you're going
+wider or hitting blocks (defaults are conservative — go *slower*, not faster, if
+blocked).
 
 Inspect / verify the tables:
 
