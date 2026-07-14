@@ -67,11 +67,12 @@ async def ingest_video(
     url_or_id: str,
     ms_token: Optional[str],
     comment_count: int,
+    client_kwargs: Optional[dict] = None,
 ) -> dict:
     """Fetch one video + its comments and upsert both tables."""
     video_path, comments_path = _paths_for(client)
 
-    async with TikTokClient(ms_token=ms_token) as tt:
+    async with TikTokClient(ms_token=ms_token, **(client_kwargs or {})) as tt:
         raw_video = await tt.get_video(url_or_id)
         video_row = schema.parse_video(raw_video, client)
         if video_row is None:
@@ -107,12 +108,13 @@ async def ingest_all(
     ms_token: Optional[str],
     max_videos: int,
     comment_count: int,
+    client_kwargs: Optional[dict] = None,
 ) -> list[dict]:
     """Sweep a creator's recent videos, ingesting each with its comments."""
     video_path, comments_path = _paths_for(client)
     summaries: list[dict] = []
 
-    async with TikTokClient(ms_token=ms_token) as tt:
+    async with TikTokClient(ms_token=ms_token, **(client_kwargs or {})) as tt:
         video_ids: list[str] = []
         async for raw_video in tt.iter_user_videos(handle, count=max_videos):
             row = schema.parse_video(raw_video, client)
@@ -147,14 +149,30 @@ def main() -> None:
     parser.add_argument("--all", action="store_true", help="sweep the creator's profile")
     parser.add_argument("--max-videos", type=int, default=30)
     parser.add_argument("--comment-count", type=int, default=200)
+    # anti-blocking knobs (see tiktok_client.TikTokClient)
+    parser.add_argument("--pool-size", type=int, default=2,
+                        help="warm sessions kept alive and reused")
+    parser.add_argument("--min-delay", type=float, default=2.0,
+                        help="minimum seconds paced between requests")
+    parser.add_argument("--max-delay", type=float, default=4.0,
+                        help="maximum seconds paced between requests")
+    parser.add_argument("--recycle-after", type=int, default=50,
+                        help="requests before rotating fingerprint + rebuilding pool")
     args = parser.parse_args()
 
     ms_token = os.getenv("MS_TOKEN") or None
     handle = resolve_handle(args.client)  # storage + row key is the handle
+    client_kwargs = {
+        "pool_size": args.pool_size,
+        "min_delay": args.min_delay,
+        "max_delay": args.max_delay,
+        "recycle_after": args.recycle_after,
+    }
 
     if args.all:
         results = asyncio.run(
-            ingest_all(handle, handle, ms_token, args.max_videos, args.comment_count)
+            ingest_all(handle, handle, ms_token, args.max_videos, args.comment_count,
+                       client_kwargs)
         )
         print(f"Ingested {len(results)} videos for @{handle}:")
         for r in results:
@@ -162,7 +180,8 @@ def main() -> None:
                   f"(table now {r['comment_rows_total']} rows)")
     elif args.video_url:
         result = asyncio.run(
-            ingest_video(handle, handle, args.video_url, ms_token, args.comment_count)
+            ingest_video(handle, handle, args.video_url, ms_token, args.comment_count,
+                         client_kwargs)
         )
         print("Ingested one video:")
         for k, v in result.items():
