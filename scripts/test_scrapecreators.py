@@ -48,12 +48,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_env() -> None:
-    """Load .env if python-dotenv is available (it's already a project dep)."""
+    """Load .env if present; never let a bad .env crash the test.
+
+    A missing .env is fine (real environment variables win). A *malformed* one is
+    also non-fatal: on Windows, PowerShell's ``>>`` writes UTF-16, which trips
+    python-dotenv's UTF-8 reader — we warn and fall back to the environment
+    rather than dying before the first request.
+    """
     try:
         from dotenv import load_dotenv
     except Exception:
         return
-    load_dotenv(REPO_ROOT / ".env")
+    try:
+        load_dotenv(REPO_ROOT / ".env")
+    except Exception as exc:
+        print(f"warning: ignoring unreadable .env ({exc}); "
+              f"using environment variables instead", file=sys.stderr)
 
 
 def get(path: str, params: dict, api_key: str, timeout: int = 60) -> tuple[int, Any]:
