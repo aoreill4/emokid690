@@ -45,10 +45,14 @@ def upsert_parquet(
     new_df = pd.DataFrame(list(records), columns=columns)
     existing = read_parquet(path, columns)
 
-    combined = pd.concat([existing, new_df], ignore_index=True)
-    if combined.empty:
+    # Only concat frames that actually have rows: concatenating an empty frame
+    # (e.g. a first run with no existing file) triggers a pandas FutureWarning
+    # about empty/all-NA dtype handling.
+    frames = [df for df in (existing, new_df) if not df.empty]
+    if not frames:
         combined = _empty_frame(columns)
     else:
+        combined = pd.concat(frames, ignore_index=True)
         sort_key = "collected_at" if "collected_at" in combined.columns else pk
         combined = (
             combined.sort_values(sort_key, kind="stable")

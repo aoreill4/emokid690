@@ -114,11 +114,21 @@ def _extract_overlay_text(raw: dict) -> Optional[str]:
 
 
 def _extract_hashtags(raw: dict) -> list[str]:
+    """Collect hashtag names, deduped in order.
+
+    Field names vary by payload source: TikTokApi's web payload uses
+    ``textExtra``/``hashtagName``; the native ``aweme`` JSON (what the hosted
+    API returns) uses ``text_extra``/``content_desc_extra`` with ``hashtag_name``.
+    Try all of them.
+    """
     tags: list[str] = []
-    for extra in raw.get("textExtra") or []:
-        name = (extra or {}).get("hashtagName")
-        if name:
-            tags.append(str(name))
+    seen: set[str] = set()
+    for key in ("textExtra", "text_extra", "content_desc_extra"):
+        for extra in raw.get(key) or []:
+            name = _first(extra or {}, "hashtagName", "hashtag_name")
+            if name and str(name) not in seen:
+                seen.add(str(name))
+                tags.append(str(name))
     return tags
 
 
@@ -136,9 +146,12 @@ def parse_video(raw: dict, client: str) -> Optional[VideoRow]:
         return None
     video_id = str(video_id)
 
-    stats = raw.get("stats") or raw.get("statsV2") or {}
+    # "statistics" is the native-aweme name (hosted API); "stats"/"statsV2" are
+    # TikTokApi's web-payload names.
+    stats = raw.get("stats") or raw.get("statsV2") or raw.get("statistics") or {}
     video_meta = raw.get("video") or {}
-    music = raw.get("music") or {}
+    # native aweme calls the attached sound "added_sound_music_info".
+    music = raw.get("music") or raw.get("added_sound_music_info") or {}
     author = raw.get("author") or {}
 
     return VideoRow(
@@ -146,7 +159,7 @@ def parse_video(raw: dict, client: str) -> Optional[VideoRow]:
         client=client,
         url=_canonical_url(video_id, author, client),
         created_at=_epoch_to_utc(_first(raw, "createTime", "create_time")),
-        caption=_first(raw, "desc"),
+        caption=_first(raw, "desc", "content_desc"),
         overlay_text=_extract_overlay_text(raw),
         transcript=None,  # populated by the subtitle/Whisper fallback in Phase 2
         hashtags=_extract_hashtags(raw),

@@ -29,7 +29,11 @@ def summarize(client: str) -> None:
 
     n_videos = con.execute("SELECT count(*) FROM video").fetchone()[0]
     n_comments = con.execute("SELECT count(*) FROM comments").fetchone()[0]
-    print(f"videos: {n_videos}   comments: {n_comments}\n")
+    n_replies = con.execute(
+        "SELECT count(*) FROM comments WHERE parent_comment_id IS NOT NULL"
+    ).fetchone()[0]
+    print(f"videos: {n_videos}   comments: {n_comments}  "
+          f"(top-level: {n_comments - n_replies}, replies: {n_replies})\n")
 
     print("per-video: reported vs. collected comments")
     rows = con.execute(
@@ -43,7 +47,7 @@ def summarize(client: str) -> None:
         FROM video v
         LEFT JOIN comments c USING (video_id)
         GROUP BY 1, 2, 3, 5, 6
-        ORDER BY v.created_at DESC NULLS LAST
+        ORDER BY max(v.created_at) DESC NULLS LAST
         """
     ).fetchall()
     for r in rows:
