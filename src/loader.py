@@ -90,12 +90,14 @@ async def ingest_video(
     handle: str,
     url_or_id: str,
     comment_count: int,
+    include_replies: bool = False,
 ) -> dict:
     """Fetch one video + its comments and upsert both tables.
 
     ``fetcher`` is any backend implementing the get_video / iter_comments /
     iter_user_videos async-context-manager surface (TikTokClient or
-    ScrapeCreatorsClient).
+    ScrapeCreatorsClient). ``include_replies`` also pulls reply threads (hosted
+    API only).
     """
     video_path, comments_path = _paths_for(client)
 
@@ -106,7 +108,9 @@ async def ingest_video(
             raise RuntimeError(f"no usable video payload for {url_or_id!r}")
 
         comment_rows = []
-        async for raw_comment in tt.iter_comments(url_or_id, count=comment_count):
+        async for raw_comment in tt.iter_comments(
+            url_or_id, count=comment_count, include_replies=include_replies
+        ):
             row = schema.parse_comment(raw_comment, video_row.video_id, client)
             if row is not None:
                 comment_rows.append(row.as_record())
@@ -135,6 +139,7 @@ async def ingest_all(
     handle: str,
     max_videos: int,
     comment_count: int,
+    include_replies: bool = False,
 ) -> list[dict]:
     """Sweep a creator's recent videos, ingesting each with its comments."""
     video_path, comments_path = _paths_for(client)
@@ -153,7 +158,9 @@ async def ingest_all(
 
         for vid in video_ids:
             comment_rows = []
-            async for raw_comment in tt.iter_comments(vid, count=comment_count):
+            async for raw_comment in tt.iter_comments(
+                vid, count=comment_count, include_replies=include_replies
+            ):
                 c = schema.parse_comment(raw_comment, vid, client)
                 if c is not None:
                     comment_rows.append(c.as_record())
@@ -202,7 +209,11 @@ def main() -> None:
     parser.add_argument("--video-url", help="single video URL or id (vertical slice)")
     parser.add_argument("--all", action="store_true", help="sweep the creator's profile")
     parser.add_argument("--max-videos", type=int, default=30)
-    parser.add_argument("--comment-count", type=int, default=200)
+    parser.add_argument("--comment-count", type=int, default=200,
+                        help="max top-level comments per video")
+    parser.add_argument("--with-replies", action="store_true",
+                        help="also fetch reply threads under each comment "
+                             "(scrapecreators only; spends extra credits)")
     parser.add_argument("--source", choices=("scrapecreators", "tiktok"),
                         default="scrapecreators",
                         help="fetch backend: 'scrapecreators' (hosted API, "
@@ -233,10 +244,15 @@ def main() -> None:
     handle = resolve_handle(args.client)  # storage + row key is the handle
     print(f"Fetching via {args.source} backend.")
 
+    if args.with_replies and args.source != "scrapecreators":
+        print("note: --with-replies is only supported by --source scrapecreators; "
+              "ignoring it for this run.")
+    include_replies = args.with_replies and args.source == "scrapecreators"
+
     if args.all:
         results = asyncio.run(
             ingest_all(make_fetcher(args, handle), handle, handle,
-                       args.max_videos, args.comment_count)
+                       args.max_videos, args.comment_count, include_replies)
         )
         print(f"Ingested {len(results)} videos for @{handle}:")
         for r in results:
@@ -245,7 +261,7 @@ def main() -> None:
     elif args.video_url:
         result = asyncio.run(
             ingest_video(make_fetcher(args, handle), handle, handle,
-                         args.video_url, args.comment_count)
+                         args.video_url, args.comment_count, include_replies)
         )
         print("Ingested one video:")
         for k, v in result.items():

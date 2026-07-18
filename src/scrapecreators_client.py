@@ -30,6 +30,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -81,6 +82,9 @@ class ScrapeCreatorsClient:
         self._timeout = timeout
         self._rng = rng or random.Random()
         self._request_count = 0
+        # best-effort reply-fetching circuit breaker (see _replies_safe)
+        self._reply_failures = 0
+        self._replies_disabled = False
 
     # -- lifecycle (no connections to hold, but keep the CM contract) ------
     async def __aenter__(self) -> "ScrapeCreatorsClient":
@@ -163,14 +167,26 @@ class ScrapeCreatorsClient:
         return detail if isinstance(detail, dict) else {}
 
     async def iter_comments(
-        self, url_or_id: str, count: int = 200
+        self,
+        url_or_id: str,
+        count: int = 200,
+        include_replies: bool = False,
+        max_replies_per_comment: int = 1000,
     ) -> AsyncIterator[dict]:
-        """Yield up to ``count`` raw comment dicts for a video, deduped, paginated."""
+        """Yield raw comment dicts for a video, deduped and paginated.
+
+        ``count`` bounds the number of *top-level* comments fetched. When
+        ``include_replies`` is set, each top-level comment that has replies also
+        has its reply thread fetched and yielded (replies are extra — they do not
+        count against ``count``). Replies arrive as comment dicts whose
+        ``reply_id`` points at the parent, so downstream parsing threads them
+        automatically.
+        """
         video_url = self._video_url(url_or_id)
         seen: set[str] = set()
         cursor = 0
-        yielded = 0
-        while yielded < count:
+        top_level = 0
+        while top_level < count:
             data = await self._get(
                 "/v1/tiktok/video/comments", {"url": video_url, "cursor": cursor}
             )
@@ -184,6 +200,71 @@ class ScrapeCreatorsClient:
                 if cid is not None:
                     seen.add(cid)
                 yield c
+                top_level += 1
+                if include_replies and cid and (c.get("reply_comment_total") or 0) > 0:
+                    async for reply in self._replies_safe(
+                        video_url, cid, max_replies_per_comment, seen
+                    ):
+                        yield reply
+                if top_level >= count:
+                    return
+            if not data.get("has_more"):
+                return
+            next_cursor = data.get("cursor")
+            if not next_cursor or next_cursor == cursor:
+                return  # guard against a stuck paginator
+            cursor = next_cursor
+
+    async def _replies_safe(
+        self, video_url: str, comment_id: str, count: int, seen: set
+    ) -> AsyncIterator[dict]:
+        """Yield a comment's replies, but never let reply errors abort the run.
+
+        Reply fetching is best-effort: if the endpoint errors (e.g. a transient
+        failure), we warn and skip that thread. After several failures in a row we
+        disable reply fetching for the rest of the run so a systemic problem
+        doesn't spam warnings or burn credits.
+        """
+        if self._replies_disabled:
+            return
+        try:
+            async for reply in self.iter_comment_replies(
+                video_url, comment_id, count=count, _seen=seen
+            ):
+                yield reply
+            self._reply_failures = 0
+        except ScrapeCreatorsError as exc:
+            self._reply_failures += 1
+            print(f"warning: could not fetch replies for comment {comment_id}: {exc}",
+                  file=sys.stderr)
+            if self._reply_failures >= 3:
+                self._replies_disabled = True
+                print("warning: disabling reply fetching for the rest of this run "
+                      "after repeated failures.", file=sys.stderr)
+
+    async def iter_comment_replies(
+        self, url_or_id: str, comment_id: str, count: int = 1000, _seen: Optional[set] = None
+    ) -> AsyncIterator[dict]:
+        """Yield up to ``count`` reply dicts for one comment, deduped, paginated."""
+        video_url = self._video_url(url_or_id)
+        seen: set = _seen if _seen is not None else set()
+        cursor = 0
+        yielded = 0
+        while yielded < count:
+            data = await self._get(
+                "/v1/tiktok/video/comment/replies",
+                {"url": video_url, "comment_id": comment_id, "cursor": cursor},
+            )
+            items = data.get("comments") or data.get("replies") or []
+            if not items:
+                return
+            for r in items:
+                rid = r.get("cid") or r.get("id")
+                if rid is not None and rid in seen:
+                    continue
+                if rid is not None:
+                    seen.add(rid)
+                yield r
                 yielded += 1
                 if yielded >= count:
                     return

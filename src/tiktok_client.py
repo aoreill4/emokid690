@@ -274,9 +274,20 @@ class TikTokClient:
         return {}
 
     async def iter_comments(
-        self, url_or_id: str, count: int = 200
+        self,
+        url_or_id: str,
+        count: int = 200,
+        include_replies: bool = False,
+        max_replies_per_comment: int = 1000,
     ) -> AsyncIterator[dict]:
-        """Yield raw comment dicts for a video, deduped across retry restarts."""
+        """Yield raw comment dicts for a video, deduped across retry restarts.
+
+        ``include_replies`` / ``max_replies_per_comment`` are accepted for
+        interface parity with ScrapeCreatorsClient but not separately honored
+        here — the scraper backend does not fetch reply threads. Use
+        ``--source scrapecreators`` for full threads.
+        """
+        del include_replies, max_replies_per_comment  # not supported by this backend
         video_id = extract_video_id(url_or_id)
         seen: set[str] = set()
         for attempt in range(self._max_retries + 1):

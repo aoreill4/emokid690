@@ -117,6 +117,26 @@ Whole profile (recent videos, handle read from `clients.csv`):
 python src/loader.py --client emokid690 --all --max-videos 30
 ```
 
+### Reply threads (`--with-replies`)
+
+By default only **top-level** comments are fetched. TikTok's headline comment
+count includes **replies** (nested under each comment), so a video showing 2,250
+comments may only have a few hundred top-level ones. To pull the full threads,
+add `--with-replies` (ScrapeCreators backend only):
+
+```bash
+python src/loader.py --client emokid690 --with-replies \
+  --video-url "https://www.tiktok.com/@emokid690/video/<id>" --comment-count 3000
+```
+
+Replies are stored in the same `comments` table with `parent_comment_id` set to
+the comment they answer (top-level comments have `parent_comment_id = null`), so
+threads reconstruct with a self-join. **Cost:** replies spend extra credits —
+roughly one API call per comment thread that has replies — so a full
+`--with-replies` pull of a busy video can be a few hundred credits. If the reply
+endpoint repeatedly errors, the loader disables reply fetching for the rest of
+the run and keeps the top-level comments (it won't crash or burn credits).
+
 ### Local scraper tuning (`--source tiktok` only)
 
 The scraper is paced to avoid bot-blocking: it reuses a small warm session pool,
