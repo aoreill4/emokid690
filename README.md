@@ -88,6 +88,33 @@ coherent browser fingerprint each time it recycles the pool. Tune via
 wider or hitting blocks (defaults are conservative — go *slower*, not faster, if
 blocked).
 
+### Proxies (spread requests across IPs)
+
+If you're still getting rate-limited or blocked, route requests through one or
+more proxies. TikTok then sees traffic from several IPs instead of your one
+address. The pool is spread across whatever proxies you provide, and the lead
+proxy rotates each time the pool recycles.
+
+Set them once in `.env` (comma- and/or newline-separated):
+
+```bash
+TIKTOK_PROXIES=http://user:pass@proxy1.example.com:8000,http://user:pass@proxy2.example.com:8000
+```
+
+…or pass them ad hoc, repeating `--proxy` per proxy:
+
+```bash
+python src/loader.py --client emokid690 --all \
+  --proxy http://user:pass@proxy1.example.com:8000 \
+  --proxy socks5://proxy2.example.com:1080
+```
+
+Format is `scheme://[user:pass@]host:port` (`http`, `https`, or `socks5`).
+Proxies from `.env` and `--proxy` are merged (duplicates dropped). Leave both
+blank for direct connections — the default, unchanged. **Residential/rotating
+proxies** hold up best against TikTok; cheap datacenter IPs get blocked quickly,
+so a proxy alone isn't a licence to pull faster — keep the pacing conservative.
+
 Inspect / verify the tables:
 
 ```bash

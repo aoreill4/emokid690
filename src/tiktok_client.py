@@ -13,11 +13,16 @@ Anti-blocking strategy (personal scale — her + a few comp creators):
     viewport + locale, so nothing contradicts). We rotate to a fresh fingerprint
     every time the pool is recycled — never a per-request UA swap, which would
     mismatch the real browser fingerprint and look *more* botty.
+  * **Proxy rotation (optional).** When one or more proxies are supplied, the pool
+    is spread across them (Playwright applies a proxy per browser session), and the
+    lead proxy is rotated every time the pool recycles — so TikTok sees traffic
+    from several IPs instead of hammering one. Without proxies this is a no-op and
+    behaviour is unchanged.
   * **Pacing + jitter** between requests, and **exponential backoff** on transient
     errors / empty (blocked) payloads.
   * **Recycling** after ``recycle_after`` requests: tear the pool down and rebuild
-    it with a new fingerprint + fresh msToken session, so long runs don't ride one
-    stale identity.
+    it with a new fingerprint + fresh msToken session (and the next proxy), so long
+    runs don't ride one stale identity.
 
 TikTokApi drives a headless Chromium via Playwright. On this repo's dev sandbox
 Chromium is pre-installed at ``$PLAYWRIGHT_BROWSERS_PATH`` — do NOT run
@@ -32,12 +37,44 @@ import glob
 import os
 import random
 import re
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, Union
+from urllib.parse import unquote, urlparse
 
 from TikTokApi import TikTokApi
 
 
 _VIDEO_ID_RE = re.compile(r"/video/(\d+)")
+
+
+def parse_proxy(proxy: Union[str, dict, None]) -> Optional[dict]:
+    """Normalize one proxy spec into the dict Playwright/TikTokApi expects.
+
+    Accepts either a URL string (``http://host:port``,
+    ``http://user:pass@host:port``, ``socks5://host:port``) or an already-formed
+    ``{"server": ...}`` dict, and returns
+    ``{"server": "scheme://host:port", "username"?: ..., "password"?: ...}``.
+
+    Credentials are URL-decoded so values containing ``@`` / ``:`` (percent-encoded
+    in the URL) survive. Returns ``None`` for empty input. Exposed as a pure
+    function so it can be unit-tested without a live browser.
+    """
+    if not proxy:
+        return None
+    if isinstance(proxy, dict):
+        return proxy
+    parsed = urlparse(str(proxy).strip())
+    if not parsed.hostname:
+        raise ValueError(f"Could not parse proxy: {proxy!r}")
+    scheme = parsed.scheme or "http"
+    server = f"{scheme}://{parsed.hostname}"
+    if parsed.port:
+        server += f":{parsed.port}"
+    out: dict[str, str] = {"server": server}
+    if parsed.username:
+        out["username"] = unquote(parsed.username)
+    if parsed.password:
+        out["password"] = unquote(parsed.password)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +178,7 @@ class TikTokClient:
         max_delay: float = 4.0,
         recycle_after: int = 50,
         max_retries: int = 4,
+        proxies: Optional[list[Union[str, dict]]] = None,
         rng: Optional[random.Random] = None,
     ):
         self._ms_token = ms_token
@@ -149,6 +187,11 @@ class TikTokClient:
         self._max_delay = max(self._min_delay, max_delay)
         self._recycle_after = max(1, recycle_after)
         self._max_retries = max(0, max_retries)
+        # Normalize once; skip blanks so an empty env var / trailing comma is inert.
+        self._proxies: list[dict] = [
+            p for p in (parse_proxy(x) for x in (proxies or [])) if p
+        ]
+        self._proxy_offset = 0
         self._rng = rng or random.Random()
 
         self._api: Optional[TikTokApi] = None
@@ -163,12 +206,29 @@ class TikTokClient:
     async def __aexit__(self, *exc) -> None:
         await self._close_pool()
 
+    def _proxies_for_generation(self) -> Optional[list[dict]]:
+        """Rotate the proxy list so a fresh pool leads with the next proxy.
+
+        TikTokApi spreads a pool across the proxies it's handed; rotating the
+        lead each generation means successive pools ride different IPs even when
+        there are more proxies than sessions. Returns ``None`` when no proxies
+        were configured (TikTokApi then makes direct connections, as before).
+        """
+        if not self._proxies:
+            return None
+        n = len(self._proxies)
+        rotated = [self._proxies[(self._proxy_offset + i) % n] for i in range(n)]
+        # advance so the next generation starts past the sessions we just used
+        self._proxy_offset = (self._proxy_offset + self._pool_size) % n
+        return rotated
+
     async def _create_pool(self) -> None:
         self._fingerprint = choose_fingerprint(self._rng)
         self._api = TikTokApi()
         ms_tokens = [self._ms_token] if self._ms_token else None
         await self._api.create_sessions(
             ms_tokens=ms_tokens,
+            proxies=self._proxies_for_generation(),
             num_sessions=self._pool_size,
             sleep_after=3,
             browser="chromium",

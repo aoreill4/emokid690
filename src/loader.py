@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import csv
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -37,6 +38,25 @@ CLIENTS_CSV = REPO_ROOT / "data" / "clients.csv"
 def _paths_for(client: str) -> tuple[Path, Path]:
     base = REPO_ROOT / "data" / client
     return base / "video" / "video.parquet", base / "comments" / "comments.parquet"
+
+
+def collect_proxies(cli_proxies: Optional[list[str]]) -> list[str]:
+    """Merge proxies from the env (``TIKTOK_PROXIES``) and ``--proxy`` flags.
+
+    ``TIKTOK_PROXIES`` is a comma- and/or newline-separated list; ``--proxy`` may
+    be repeated. Order is env-first then CLI, blanks dropped, duplicates removed
+    (first occurrence wins). Parsing/validation happens in TikTokClient.
+    """
+    env_raw = os.getenv("TIKTOK_PROXIES", "")
+    env_proxies = [p.strip() for p in re.split(r"[,\n]", env_raw)]
+    merged = [*env_proxies, *(cli_proxies or [])]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in merged:
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 def _handle_from_url(url: str) -> Optional[str]:
@@ -158,15 +178,22 @@ def main() -> None:
                         help="maximum seconds paced between requests")
     parser.add_argument("--recycle-after", type=int, default=50,
                         help="requests before rotating fingerprint + rebuilding pool")
+    parser.add_argument("--proxy", action="append", metavar="URL",
+                        help="proxy URL (scheme://[user:pass@]host:port); repeatable. "
+                             "Also read from the TIKTOK_PROXIES env var.")
     args = parser.parse_args()
 
     ms_token = os.getenv("MS_TOKEN") or None
     handle = resolve_handle(args.client)  # storage + row key is the handle
+    proxies = collect_proxies(args.proxy)
+    if proxies:
+        print(f"Using {len(proxies)} proxy/proxies for TikTok requests.")
     client_kwargs = {
         "pool_size": args.pool_size,
         "min_delay": args.min_delay,
         "max_delay": args.max_delay,
         "recycle_after": args.recycle_after,
+        "proxies": proxies,
     }
 
     if args.all:
