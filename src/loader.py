@@ -19,7 +19,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -28,7 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import schema  # noqa: E402
 import storage  # noqa: E402
-from tiktok_client import TikTokClient  # noqa: E402
+
+# NOTE: the fetch backends are imported lazily in make_fetcher() — TikTokClient
+# pulls in TikTokApi/Playwright, which the ScrapeCreators path doesn't need, so
+# a ScrapeCreators-only user never has to install that heavy stack.
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -82,17 +85,21 @@ def resolve_handle(identifier: str) -> str:
 
 
 async def ingest_video(
+    fetcher: Any,
     client: str,
     handle: str,
     url_or_id: str,
-    ms_token: Optional[str],
     comment_count: int,
-    client_kwargs: Optional[dict] = None,
 ) -> dict:
-    """Fetch one video + its comments and upsert both tables."""
+    """Fetch one video + its comments and upsert both tables.
+
+    ``fetcher`` is any backend implementing the get_video / iter_comments /
+    iter_user_videos async-context-manager surface (TikTokClient or
+    ScrapeCreatorsClient).
+    """
     video_path, comments_path = _paths_for(client)
 
-    async with TikTokClient(ms_token=ms_token, **(client_kwargs or {})) as tt:
+    async with fetcher as tt:
         raw_video = await tt.get_video(url_or_id)
         video_row = schema.parse_video(raw_video, client)
         if video_row is None:
@@ -123,18 +130,17 @@ async def ingest_video(
 
 
 async def ingest_all(
+    fetcher: Any,
     client: str,
     handle: str,
-    ms_token: Optional[str],
     max_videos: int,
     comment_count: int,
-    client_kwargs: Optional[dict] = None,
 ) -> list[dict]:
     """Sweep a creator's recent videos, ingesting each with its comments."""
     video_path, comments_path = _paths_for(client)
     summaries: list[dict] = []
 
-    async with TikTokClient(ms_token=ms_token, **(client_kwargs or {})) as tt:
+    async with fetcher as tt:
         video_ids: list[str] = []
         async for raw_video in tt.iter_user_videos(handle, count=max_videos):
             row = schema.parse_video(raw_video, client)
@@ -161,6 +167,34 @@ async def ingest_all(
     return summaries
 
 
+def make_fetcher(args: argparse.Namespace, handle: str) -> Any:
+    """Build the fetch backend selected by --source (imported lazily).
+
+    Returns an async context manager exposing get_video / iter_comments /
+    iter_user_videos. Kept lazy so `--source scrapecreators` doesn't require
+    TikTokApi/Playwright to be installed, and vice versa.
+    """
+    if args.source == "scrapecreators":
+        from scrapecreators_client import ScrapeCreatorsClient  # noqa: E402
+
+        return ScrapeCreatorsClient(
+            handle=handle,
+            min_delay=args.min_delay,
+            max_delay=args.max_delay,
+        )
+
+    from tiktok_client import TikTokClient  # noqa: E402
+
+    return TikTokClient(
+        ms_token=os.getenv("MS_TOKEN") or None,
+        pool_size=args.pool_size,
+        min_delay=args.min_delay,
+        max_delay=args.max_delay,
+        recycle_after=args.recycle_after,
+        proxies=collect_proxies(args.proxy),
+    )
+
+
 def main() -> None:
     load_dotenv(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="Pull TikTok data into parquet tables.")
@@ -169,37 +203,40 @@ def main() -> None:
     parser.add_argument("--all", action="store_true", help="sweep the creator's profile")
     parser.add_argument("--max-videos", type=int, default=30)
     parser.add_argument("--comment-count", type=int, default=200)
-    # anti-blocking knobs (see tiktok_client.TikTokClient)
-    parser.add_argument("--pool-size", type=int, default=2,
-                        help="warm sessions kept alive and reused")
-    parser.add_argument("--min-delay", type=float, default=2.0,
+    parser.add_argument("--source", choices=("scrapecreators", "tiktok"),
+                        default="scrapecreators",
+                        help="fetch backend: 'scrapecreators' (hosted API, "
+                             "recommended) or 'tiktok' (local scraper). Default: "
+                             "scrapecreators.")
+    # pacing knobs. Default depends on --source: the local scraper paces 2-4s to
+    # avoid bot-blocking; the hosted API needs no client-side pacing (0s).
+    parser.add_argument("--min-delay", type=float, default=None,
                         help="minimum seconds paced between requests")
-    parser.add_argument("--max-delay", type=float, default=4.0,
+    parser.add_argument("--max-delay", type=float, default=None,
                         help="maximum seconds paced between requests")
+    # scraper-only anti-blocking knobs (ignored when --source scrapecreators).
+    parser.add_argument("--pool-size", type=int, default=2,
+                        help="[tiktok] warm sessions kept alive and reused")
     parser.add_argument("--recycle-after", type=int, default=50,
-                        help="requests before rotating fingerprint + rebuilding pool")
+                        help="[tiktok] requests before rotating fingerprint + pool")
     parser.add_argument("--proxy", action="append", metavar="URL",
-                        help="proxy URL (scheme://[user:pass@]host:port); repeatable. "
-                             "Also read from the TIKTOK_PROXIES env var.")
+                        help="[tiktok] proxy URL (scheme://[user:pass@]host:port); "
+                             "repeatable. Also read from the TIKTOK_PROXIES env var.")
     args = parser.parse_args()
 
-    ms_token = os.getenv("MS_TOKEN") or None
+    # resolve source-dependent pacing defaults
+    if args.min_delay is None:
+        args.min_delay = 0.0 if args.source == "scrapecreators" else 2.0
+    if args.max_delay is None:
+        args.max_delay = 0.0 if args.source == "scrapecreators" else 4.0
+
     handle = resolve_handle(args.client)  # storage + row key is the handle
-    proxies = collect_proxies(args.proxy)
-    if proxies:
-        print(f"Using {len(proxies)} proxy/proxies for TikTok requests.")
-    client_kwargs = {
-        "pool_size": args.pool_size,
-        "min_delay": args.min_delay,
-        "max_delay": args.max_delay,
-        "recycle_after": args.recycle_after,
-        "proxies": proxies,
-    }
+    print(f"Fetching via {args.source} backend.")
 
     if args.all:
         results = asyncio.run(
-            ingest_all(handle, handle, ms_token, args.max_videos, args.comment_count,
-                       client_kwargs)
+            ingest_all(make_fetcher(args, handle), handle, handle,
+                       args.max_videos, args.comment_count)
         )
         print(f"Ingested {len(results)} videos for @{handle}:")
         for r in results:
@@ -207,8 +244,8 @@ def main() -> None:
                   f"(table now {r['comment_rows_total']} rows)")
     elif args.video_url:
         result = asyncio.run(
-            ingest_video(handle, handle, args.video_url, ms_token, args.comment_count,
-                         client_kwargs)
+            ingest_video(make_fetcher(args, handle), handle, handle,
+                         args.video_url, args.comment_count)
         )
         print("Ingested one video:")
         for k, v in result.items():

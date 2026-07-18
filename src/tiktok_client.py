@@ -36,14 +36,12 @@ import asyncio
 import glob
 import os
 import random
-import re
 from typing import Any, AsyncIterator, Optional, Union
 from urllib.parse import unquote, urlparse
 
 from TikTokApi import TikTokApi
 
-
-_VIDEO_ID_RE = re.compile(r"/video/(\d+)")
+from _util import backoff_schedule, extract_video_id  # noqa: F401  (re-exported)
 
 
 def parse_proxy(proxy: Union[str, dict, None]) -> Optional[dict]:
@@ -120,16 +118,6 @@ def choose_fingerprint(rng: Optional[random.Random] = None) -> dict[str, Any]:
     return dict(r.choice(FINGERPRINTS))
 
 
-def backoff_schedule(
-    max_retries: int, base: float = 2.0, cap: float = 16.0
-) -> list[float]:
-    """Deterministic backoff bases: base * 2**i, capped (jitter added at runtime).
-
-    e.g. max_retries=4 -> [2, 4, 8, 16]. Exposed as a pure function for testing.
-    """
-    return [min(base * (2 ** i), cap) for i in range(max_retries)]
-
-
 def _preinstalled_chromium() -> Optional[str]:
     """Return a pre-installed Chromium path so Playwright doesn't download one.
 
@@ -147,17 +135,6 @@ def _preinstalled_chromium() -> Optional[str]:
         if matches:
             return matches[-1]
     return None
-
-
-def extract_video_id(url_or_id: str) -> str:
-    """Accept a full TikTok URL or a bare numeric id and return the id."""
-    s = str(url_or_id).strip()
-    if s.isdigit():
-        return s
-    m = _VIDEO_ID_RE.search(s)
-    if m:
-        return m.group(1)
-    raise ValueError(f"Could not extract a video id from: {url_or_id!r}")
 
 
 class TikTokClient:

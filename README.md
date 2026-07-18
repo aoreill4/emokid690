@@ -31,17 +31,43 @@ src/
   query.py          # DuckDB inspection / verification
 ```
 
+## Fetch backends
+
+The loader can pull data two ways, chosen with `--source`:
+
+| `--source` | How it works | Trade-off |
+|---|---|---|
+| `scrapecreators` **(default, recommended)** | Calls the [ScrapeCreators](https://scrapecreators.com) hosted API over plain HTTPS. They run the scraping + proxies server-side and return TikTok's native JSON. | Needs an API key (100 free credits, then paid — ~$47 for 25k). **No bot-blocking, no browser, runs anywhere.** |
+| `tiktok` | Drives a headless Chromium via `TikTokApi` locally. Free, but gets rate-limited/blocked, needs a heavy install, and must run on a machine that can reach tiktok.com. Optional proxy support (see below). | Free but fragile; you maintain it. |
+
+Both backends feed the exact same parsers and tables — only the fetch differs.
+
 ## Setup
+
+**Recommended (hosted API):** lighter install — no TikTokApi/Playwright.
+
+```bash
+python3 -m pip install -r requirements-scrapecreators.txt
+cp .env.example .env      # then paste your SCRAPECREATORS_API_KEY
+```
+
+Get a key (100 free credits, no card) at
+[scrapecreators.com](https://scrapecreators.com) and put it in `.env`:
+
+```
+SCRAPECREATORS_API_KEY=your_key_here
+```
+
+**Local scraper instead (`--source tiktok`):** install the full stack and,
+optionally, an `MS_TOKEN`:
 
 ```bash
 python3 -m pip install -r requirements.txt
-cp .env.example .env      # then paste an MS_TOKEN (see below)
 ```
 
-`MS_TOKEN` is a TikTok session cookie. It's optional but strongly recommended —
-without it TikTok bot-blocks most requests. Get it by logging in to tiktok.com
-as @emokid690, then DevTools → Application → Cookies → copy the `msToken` value
-into `.env`.
+`MS_TOKEN` is a TikTok session cookie that reduces bot-blocking for the scraper.
+Get it by logging in to tiktok.com as @emokid690, then DevTools → Application →
+Cookies → copy the `msToken` value into `.env`.
 
 ### Windows (PowerShell)
 
@@ -54,22 +80,32 @@ installed (the Store stub PowerShell points at is not real Python):
 2. Use the **`py` launcher** instead of `python`/`pip`:
 
 ```powershell
-py -m pip install -r requirements.txt
+py -m pip install -r requirements-scrapecreators.txt   # recommended, lighter
 
 Copy-Item .env.example .env
-notepad .env            # paste your msToken after MS_TOKEN=  then save & close
+notepad .env            # paste your SCRAPECREATORS_API_KEY  then save & close
 
 py src/loader.py --client emokid690 --video-url "https://www.tiktok.com/@emokid690/video/<id>"
 py src/query.py --client emokid690
 ```
 
 Replace `<id>` with a real numeric video id (the long number at the end of a
-video's URL). The **first run is slow** — TikTokApi downloads a matching Chromium
-once. `Copy-Item` is PowerShell's `cp`.
+video's URL). `Copy-Item` is PowerShell's `cp`.
+
+> **Editing `.env` on Windows:** use `notepad .env` (saves UTF-8). Do **not**
+> create it with `echo "..." >> .env` — PowerShell writes that as UTF-16, which
+> the `.env` reader can't parse. If you hit a `UnicodeDecodeError`, delete
+> `.env` and recreate it with notepad, or just set the key for the session:
+> `$env:SCRAPECREATORS_API_KEY="your_key"`.
+
+If you use `--source tiktok` instead, install the full stack with
+`py -m pip install -r requirements.txt`; the **first run is slow** while
+TikTokApi downloads a matching Chromium.
 
 ## Run
 
-Vertical slice — one video and its comments:
+Uses the ScrapeCreators backend by default (add `--source tiktok` for the local
+scraper). Vertical slice — one video and its comments:
 
 ```bash
 python src/loader.py --client emokid690 --video-url "https://www.tiktok.com/@emokid690/video/<id>"
@@ -81,14 +117,17 @@ Whole profile (recent videos, handle read from `clients.csv`):
 python src/loader.py --client emokid690 --all --max-videos 30
 ```
 
-The loader is paced to avoid bot-blocking: it reuses a small warm session pool,
+### Local scraper tuning (`--source tiktok` only)
+
+The scraper is paced to avoid bot-blocking: it reuses a small warm session pool,
 sleeps (with jitter) between requests, retries with backoff, and rotates a
 coherent browser fingerprint each time it recycles the pool. Tune via
 `--pool-size`, `--min-delay`, `--max-delay`, `--recycle-after` if you're going
 wider or hitting blocks (defaults are conservative — go *slower*, not faster, if
-blocked).
+blocked). These flags are ignored by the ScrapeCreators backend, which needs no
+client-side pacing.
 
-### Proxies (spread requests across IPs)
+#### Proxies (spread requests across IPs)
 
 If you're still getting rate-limited or blocked, route requests through one or
 more proxies. TikTok then sees traffic from several IPs instead of your one
@@ -123,11 +162,12 @@ python src/query.py --client emokid690
 
 ## ⚠️ Where to run it: not in Claude Code on the web
 
-TikTok scraping needs outbound access to `tiktok.com`. **The hosted/web sandbox
-blocks it** (the network gateway returns 403 for `tiktok.com`), so the loader
-**must run on a machine that can reach TikTok** — your laptop, or a server you
-control. The code itself is verified end-to-end there; only the live fetch is
-gated by the sandbox's network policy.
+Either backend needs outbound network access that **the hosted/web sandbox
+blocks** — the gateway returns 403 for both `tiktok.com` (scraper) and
+`api.scrapecreators.com` (hosted API). So the loader **must run on a machine
+with normal internet** — your laptop, or a server you control. The code itself
+is verified end-to-end; only the live fetch is gated by the sandbox's network
+policy.
 
 Workflow: run the loader locally → it writes the parquet files → commit and push
 them. Analysis and reporting (later phases) can then run anywhere, including the
@@ -138,8 +178,10 @@ web sandbox, since they only read the committed parquet.
 - **`overlay_text`** (the white text on the video) and **`transcript`** (spoken
   script / captions) are nullable — TikTok metadata often omits them. Phase 2
   fills these via frame OCR and audio transcription (Whisper).
-- Free unofficial scraping can rate-limit or break when TikTok changes; keep
-  pulls modest.
+- The `--source tiktok` scraper can rate-limit or break when TikTok changes;
+  keep pulls modest, or use `--source scrapecreators` (paid, more reliable).
+- `--source scrapecreators` spends API credits per request; a full profile pull
+  is roughly one credit per video + one per comment page.
 - Comment authors are stored as a salted-free SHA-256 hash, not raw handles.
 
 ## Roadmap (next phases)

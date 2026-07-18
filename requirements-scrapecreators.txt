@@ -1,0 +1,11 @@
+# Minimal deps for the hosted-API path (--source scrapecreators).
+# No TikTokApi / Playwright / Chromium — the ScrapeCreators client is stdlib-only
+# and just needs the storage + query stack. Much lighter to install (esp. on
+# Windows) than the full requirements.txt.
+#
+#   py -m pip install -r requirements-scrapecreators.txt
+#
+pandas>=2.0.0
+pyarrow>=14.0.0
+duckdb>=0.9.0
+python-dotenv>=1.0.0
