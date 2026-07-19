@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Smoke-test the ScrapeCreators TikTok API before wiring it into the pipeline.
 
 Run this on a machine with normal internet access. **It will not work in the

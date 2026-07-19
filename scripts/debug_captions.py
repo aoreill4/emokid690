@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Inspect a TikTok video's caption info (cla_info) to see whether TikTok already
 has an auto-generated transcript we can grab for free — no Whisper needed.
 
