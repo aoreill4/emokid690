@@ -180,6 +180,37 @@ Inspect / verify the tables:
 python src/query.py --client emokid690
 ```
 
+## Sync to Supabase (Postgres)
+
+Push the parquet tables into a Supabase database so you can query/join them in
+SQL and build dashboards. Ingestion stays parquet-based; this is a separate,
+idempotent step (upsert by primary key — safe to re-run, never re-spends fetch
+credits).
+
+1. **Create the tables once.** In your Supabase project → SQL Editor → paste and
+   run [`db/supabase_schema.sql`](db/supabase_schema.sql). It creates `video` and
+   `comments` typed to match the parquet, with the right primary keys.
+2. **Add credentials** to `.env` (Supabase dashboard → Project Settings → API):
+
+   ```
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_KEY=<service_role key>
+   ```
+
+   Use the **service_role** key (not anon) so writes aren't blocked by row-level
+   security. It's gitignored via `.env` — never commit it.
+3. **Install and sync:**
+
+   ```bash
+   python3 -m pip install -r requirements-supabase.txt
+   python src/sync_supabase.py --client emokid690
+   ```
+
+Re-run `sync_supabase.py` after any loader run to push new/updated rows. Threaded
+replies come along automatically (`comments.parent_comment_id` points at the
+parent; top-level comments have it `null`), so you can reconstruct any thread
+with a self-join.
+
 ## ⚠️ Where to run it: not in Claude Code on the web
 
 Either backend needs outbound network access that **the hosted/web sandbox

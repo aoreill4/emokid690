@@ -1,0 +1,8 @@
+# Deps for pushing the parquet tables to Supabase (src/sync_supabase.py).
+#
+#   py -m pip install -r requirements-supabase.txt
+#
+supabase>=2.0.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+python-dotenv>=1.0.0
