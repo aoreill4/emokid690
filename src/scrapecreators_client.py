@@ -37,8 +37,11 @@ import urllib.request
 from typing import Any, AsyncIterator, Optional
 
 from _util import backoff_schedule, extract_video_id
+from schema import webvtt_to_text
 
 BASE_URL = "https://api.scrapecreators.com"
+_CAPTION_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
 
 class ScrapeCreatorsError(RuntimeError):
@@ -308,6 +311,94 @@ class ScrapeCreatorsClient:
             if not next_cursor or next_cursor == cursor:
                 return  # guard against a stuck paginator
             cursor = next_cursor
+
+    # -- transcripts (TikTok auto-captions) --------------------------------
+    async def get_transcript(
+        self, url_or_id: str, detail: Optional[dict] = None
+    ) -> Optional[dict]:
+        """Return ``{'transcript','lang','source'}`` from TikTok's auto-caption, else None.
+
+        Reads ``video.cla_info.caption_infos`` from the video-info payload, picks
+        the original-language WebVTT caption, downloads it, and flattens it to
+        plain text. Returns None when the video has no usable caption (a Whisper
+        fallback could fill those later). Pass a pre-fetched ``detail``
+        (aweme_detail) to skip the video-info call.
+        """
+        if detail is None:
+            detail = await self.get_video(url_or_id)
+        info = _pick_caption((detail.get("video") or {}).get("cla_info") or {})
+        if not info:
+            return None
+        url = _caption_url(info)
+        if not url:
+            return None
+        vtt = await self._download_text(url)
+        if not vtt:
+            return None
+        text = webvtt_to_text(vtt)
+        if not text:
+            return None
+        return {
+            "transcript": text,
+            "lang": info.get("language_code") or info.get("lang"),
+            "source": "tiktok_caption",
+        }
+
+    async def _download_text(self, url: str) -> Optional[str]:
+        """GET an arbitrary URL (e.g. a caption CDN file) as text; None on failure."""
+        bases = backoff_schedule(self._max_retries)
+        for attempt in range(self._max_retries + 1):
+            try:
+                status, body = await asyncio.to_thread(
+                    _blocking_download, url, self._timeout
+                )
+            except (urllib.error.URLError, TimeoutError):
+                status, body = 0, ""
+            if status == 200 and body:
+                return body
+            if attempt >= self._max_retries:
+                return None
+            await self._backoff(bases, attempt)
+        return None
+
+
+def _blocking_download(url: str, timeout: float) -> tuple[int, str]:
+    req = urllib.request.Request(url, headers={"User-Agent": _CAPTION_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, ""
+
+
+def _pick_caption(cla_info: dict) -> Optional[dict]:
+    """Choose the best caption entry: original spoken language, WebVTT preferred."""
+    infos = cla_info.get("caption_infos") if isinstance(cla_info, dict) else None
+    if not isinstance(infos, list):
+        return None
+    dicts = [i for i in infos if isinstance(i, dict)]
+    if not dicts:
+        return None
+    # prefer the original caption over machine translations
+    originals = [
+        i for i in dicts
+        if i.get("is_original_caption") or i.get("translation_type") in (0, None)
+    ]
+    pool = originals or dicts
+    for i in pool:  # prefer webvtt when a format is stated
+        if str(i.get("caption_format", "")).lower() == "webvtt":
+            return i
+    return pool[0]
+
+
+def _caption_url(info: dict) -> Optional[str]:
+    url = info.get("url")
+    if isinstance(url, str) and url.startswith("http"):
+        return url
+    for u in info.get("url_list") or []:
+        if isinstance(u, str) and u.startswith("http"):
+            return u
+    return None
 
 
 def _message(body: str) -> str:

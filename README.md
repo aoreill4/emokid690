@@ -180,6 +180,25 @@ Inspect / verify the tables:
 python src/query.py --client emokid690
 ```
 
+## Transcripts (`src/transcribe.py`)
+
+Fill the `transcript` grain (`video_id, transcript, lang, source`) from **TikTok's
+own auto-captions** — free, no Whisper, no video download, no ffmpeg. It reads the
+video's caption (WebVTT) from the API, strips the timestamps, and stores clean
+plain text.
+
+```bash
+python src/transcribe.py --client emokid690            # only videos missing one
+python src/transcribe.py --client emokid690 --limit 5  # try a few first
+python src/transcribe.py --client emokid690 --refresh  # re-fetch all
+```
+
+It's incremental (skips videos already transcribed) and prints coverage
+(`transcribed N, no caption M`). Videos without a TikTok caption are reported as
+gaps; `source` records the origin (`tiktok_caption`) so a Whisper fallback could
+later fill gaps under a different source tag. Costs ~1 API credit per video (the
+caption download itself is free). Push to Supabase with `sync_supabase.py`.
+
 ## Sync to Supabase (Postgres)
 
 Push the parquet tables into a Supabase database so you can query/join them in

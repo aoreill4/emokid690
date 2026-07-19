@@ -42,6 +42,15 @@ create table if not exists comments (
     collected_at      timestamptz
 );
 
+create table if not exists transcript (
+    video_id     text primary key references video (video_id) on delete cascade,
+    client       text,
+    transcript   text,
+    lang         text,
+    source       text,   -- "tiktok_caption" or (later) "faster-whisper:<model>"
+    collected_at timestamptz
+);
+
 -- Helpful indexes for the common access patterns (join comments->video, thread
 -- reconstruction, and per-client filtering). No strict FK on comments.video_id
 -- so a comment can sync even if its video row hasn't been ingested yet.
@@ -49,3 +58,4 @@ create index if not exists comments_video_id_idx  on comments (video_id);
 create index if not exists comments_parent_id_idx on comments (parent_comment_id);
 create index if not exists video_client_idx       on video (client);
 create index if not exists comments_client_idx     on comments (client);
+create index if not exists transcript_client_idx   on transcript (client);

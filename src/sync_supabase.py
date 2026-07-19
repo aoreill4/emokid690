@@ -44,9 +44,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CHUNK = 500  # rows per upsert request (keeps payloads well under PostgREST limits)
 
 
-def _paths_for(client: str) -> tuple[Path, Path]:
+def _paths_for(client: str) -> tuple[Path, Path, Path]:
     base = REPO_ROOT / "data" / client
-    return base / "video" / "video.parquet", base / "comments" / "comments.parquet"
+    return (
+        base / "video" / "video.parquet",
+        base / "comments" / "comments.parquet",
+        base / "transcript" / "transcript.parquet",
+    )
 
 
 def _clean_value(v):
@@ -144,16 +148,19 @@ def _upsert(sb, table: str, records: list[dict], on_conflict: str) -> int:
 
 
 def sync(client: str) -> None:
-    video_path, comments_path = _paths_for(client)
+    video_path, comments_path, transcript_path = _paths_for(client)
     sb = _supabase_client()
 
     print(f"Syncing '{client}' to Supabase...")
     video_records = _load_records(video_path, schema.VIDEO_COLUMNS)
     comment_records = _load_records(comments_path, schema.COMMENT_COLUMNS)
+    transcript_records = _load_records(transcript_path, schema.TRANSCRIPT_COLUMNS)
 
     n_video = _upsert(sb, "video", video_records, schema.VIDEO_PK)
     n_comments = _upsert(sb, "comments", comment_records, schema.COMMENT_PK)
-    print(f"Done: {n_video} video rows, {n_comments} comment rows upserted.")
+    n_transcript = _upsert(sb, "transcript", transcript_records, schema.TRANSCRIPT_PK)
+    print(f"Done: {n_video} video, {n_comments} comment, "
+          f"{n_transcript} transcript rows upserted.")
 
 
 def main() -> None:

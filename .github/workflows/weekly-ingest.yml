@@ -46,6 +46,9 @@ jobs:
             --since-days 8 --with-replies \
             --comment-count 5000 --max-videos 100
 
+      - name: Transcribe new videos (TikTok captions)
+        run: python src/transcribe.py --client emokid690
+
       - name: Sync to Supabase
         run: python src/sync_supabase.py --client emokid690
 

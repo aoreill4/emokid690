@@ -11,6 +11,7 @@ falls back to ``None`` rather than raising. Missing-but-expected fields
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -228,3 +229,42 @@ def parse_comment(raw: dict, video_id: str, client: str) -> Optional[CommentRow]
         author_hash=hash_author(username),
         created_at=_epoch_to_utc(_first(raw, "create_time", "createTime")),
     )
+
+
+# ---------------------------------------------------------------------------
+# transcript grain
+# ---------------------------------------------------------------------------
+@dataclass
+class TranscriptRow:
+    video_id: str
+    client: str
+    transcript: Optional[str]
+    lang: Optional[str]
+    source: Optional[str]   # e.g. "tiktok_caption" or "faster-whisper:small"
+    collected_at: datetime = field(default_factory=_now_utc)
+
+    def as_record(self) -> dict:
+        return asdict(self)
+
+
+TRANSCRIPT_COLUMNS = list(TranscriptRow.__dataclass_fields__.keys())
+TRANSCRIPT_PK = "video_id"
+
+
+def webvtt_to_text(vtt: str) -> str:
+    """Flatten a WebVTT caption file into a clean plain-text transcript.
+
+    Drops the ``WEBVTT`` header, cue numbers, and timestamp lines; collapses
+    whitespace; and removes consecutive duplicate lines (TikTok's rolling
+    captions repeat a line as it scrolls). Pure function — unit-testable.
+    """
+    lines: list[str] = []
+    for raw in (vtt or "").splitlines():
+        s = raw.strip()
+        if not s or s == "WEBVTT" or "-->" in s or s.isdigit():
+            continue
+        if s.startswith(("NOTE", "STYLE", "REGION", "Kind:", "Language:")):
+            continue
+        if not lines or lines[-1] != s:
+            lines.append(s)
+    return re.sub(r"\s+", " ", " ".join(lines)).strip()
