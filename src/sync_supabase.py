@@ -50,6 +50,7 @@ def _paths_for(client: str) -> tuple[Path, Path, Path]:
         base / "video" / "video.parquet",
         base / "comments" / "comments.parquet",
         base / "transcript" / "transcript.parquet",
+        base / "jokes" / "jokes.parquet",
     )
 
 
@@ -148,19 +149,21 @@ def _upsert(sb, table: str, records: list[dict], on_conflict: str) -> int:
 
 
 def sync(client: str) -> None:
-    video_path, comments_path, transcript_path = _paths_for(client)
+    video_path, comments_path, transcript_path, jokes_path = _paths_for(client)
     sb = _supabase_client()
 
     print(f"Syncing '{client}' to Supabase...")
     video_records = _load_records(video_path, schema.VIDEO_COLUMNS)
     comment_records = _load_records(comments_path, schema.COMMENT_COLUMNS)
     transcript_records = _load_records(transcript_path, schema.TRANSCRIPT_COLUMNS)
+    joke_records = _load_records(jokes_path, schema.JOKE_COLUMNS)
 
     n_video = _upsert(sb, "video", video_records, schema.VIDEO_PK)
     n_comments = _upsert(sb, "comments", comment_records, schema.COMMENT_PK)
     n_transcript = _upsert(sb, "transcript", transcript_records, schema.TRANSCRIPT_PK)
+    n_jokes = _upsert(sb, "jokes", joke_records, schema.JOKE_PK)
     print(f"Done: {n_video} video, {n_comments} comment, "
-          f"{n_transcript} transcript rows upserted.")
+          f"{n_transcript} transcript, {n_jokes} joke rows upserted.")
 
 
 def main() -> None:

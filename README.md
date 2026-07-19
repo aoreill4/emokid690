@@ -199,6 +199,27 @@ gaps; `source` records the origin (`tiktok_caption`) so a Whisper fallback could
 later fill gaps under a different source tag. Costs ~1 API credit per video (the
 caption download itself is free). Push to Supabase with `sync_supabase.py`.
 
+## Jokes (`src/segment_jokes.py`)
+
+Split each transcript into its individual **jokes** (comedic beats) via the Claude
+API, producing a `jokes` grain (`joke_id, video_id, joke_index, joke_text,
+punchline, theme`). The prompt lives in the
+[`identify-jokes` skill](.claude/skills/identify-jokes/SKILL.md) — the script uses
+that `SKILL.md` as its system prompt, so tuning the skill (invoke it interactively
+to iterate) automatically changes what the pipeline produces.
+
+```bash
+python src/segment_jokes.py --client emokid690 --limit 3   # try a few first
+python src/segment_jokes.py --client emokid690             # all transcripts
+python src/segment_jokes.py --client emokid690 --refresh   # redo all
+```
+
+Add an `ANTHROPIC_API_KEY` to `.env` (platform.claude.com → API keys). It's
+incremental (skips videos already segmented) and costs one Claude call per
+transcript — a few cents for a full backfill on the default model
+(`claude-opus-4-8`; override with `--model`). Later phases match audience comments
+to these jokes and score sentiment to rank the best-performing bits.
+
 ## Sync to Supabase (Postgres)
 
 Push the parquet tables into a Supabase database so you can query/join them in

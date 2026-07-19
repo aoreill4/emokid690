@@ -251,6 +251,25 @@ TRANSCRIPT_COLUMNS = list(TranscriptRow.__dataclass_fields__.keys())
 TRANSCRIPT_PK = "video_id"
 
 
+@dataclass
+class JokeRow:
+    joke_id: str            # f"{video_id}-{joke_index}" — stable, deterministic
+    video_id: str
+    client: str
+    joke_index: int
+    joke_text: Optional[str]
+    punchline: Optional[str]
+    theme: Optional[str]
+    collected_at: datetime = field(default_factory=_now_utc)
+
+    def as_record(self) -> dict:
+        return asdict(self)
+
+
+JOKE_COLUMNS = list(JokeRow.__dataclass_fields__.keys())
+JOKE_PK = "joke_id"
+
+
 def webvtt_to_text(vtt: str) -> str:
     """Flatten a WebVTT caption file into a clean plain-text transcript.
 

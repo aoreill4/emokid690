@@ -26,6 +26,7 @@ jobs:
       SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +37,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-scrapecreators.txt -r requirements-supabase.txt
+          pip install -r requirements-scrapecreators.txt -r requirements-supabase.txt \
+                      -r requirements-jokes.txt
 
       - name: Ingest last week's videos (with replies)
         # --since-days 8 gives a 1-day overlap so nothing slips through the gap
@@ -48,6 +50,9 @@ jobs:
 
       - name: Transcribe new videos (TikTok captions)
         run: python src/transcribe.py --client emokid690
+
+      - name: Segment transcripts into jokes (Claude API)
+        run: python src/segment_jokes.py --client emokid690
 
       - name: Sync to Supabase
         run: python src/sync_supabase.py --client emokid690
