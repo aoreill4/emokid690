@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -35,6 +36,24 @@ def _fetch(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode("utf-8", "replace")
+
+
+def webvtt_to_text(vtt: str) -> str:
+    """Flatten a WebVTT caption file into a clean plain-text transcript.
+
+    Drops the header, cue numbers, and timestamp lines; collapses whitespace;
+    and removes consecutive duplicate lines (TikTok's rolling captions repeat).
+    """
+    lines: list[str] = []
+    for raw in vtt.splitlines():
+        s = raw.strip()
+        if not s or s == "WEBVTT" or "-->" in s or s.isdigit():
+            continue
+        if s.startswith(("NOTE", "STYLE", "REGION", "Kind:", "Language:")):
+            continue
+        if not lines or lines[-1] != s:  # skip immediate repeats
+            lines.append(s)
+    return re.sub(r"\s+", " ", " ".join(lines)).strip()
 
 
 def _find_url(d: dict):
@@ -80,11 +99,17 @@ async def main() -> int:
             continue
         url = _find_url(info)
         if url:
-            print("\n=== fetched caption file (first 1500 chars) ===")
             try:
-                print(_fetch(url)[:1500])
+                vtt = _fetch(url)
             except Exception as exc:
                 print("could not fetch caption url:", exc)
+                break
+            print(f"\n=== raw WebVTT ({len(vtt)} chars) ===")
+            print(vtt)
+            transcript = webvtt_to_text(vtt)
+            print(f"\n=== cleaned transcript ({len(transcript)} chars) — "
+                  f"this is what we'd store ===")
+            print(transcript)
             break
     else:
         if not infos:
