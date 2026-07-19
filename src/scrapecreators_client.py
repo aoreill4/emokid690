@@ -283,8 +283,11 @@ class ScrapeCreatorsClient:
         cursor = 0
         yielded = 0
         while yielded < count:
+            # NOTE: this endpoint takes the paging cursor as `max_cursor` (the
+            # comments endpoint uses `cursor` — they differ). Sending `cursor`
+            # here is ignored, so the API keeps returning page 1.
             data = await self._get(
-                "/v3/tiktok/profile/videos", {"handle": username, "cursor": cursor}
+                "/v3/tiktok/profile/videos", {"handle": username, "max_cursor": cursor}
             )
             items = data.get("aweme_list") or []
             if not items:
