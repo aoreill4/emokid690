@@ -1,0 +1,53 @@
+name: Weekly TikTok ingest
+
+# Pulls the previous week's videos (with comments + replies) and syncs them to
+# Supabase. Runs on GitHub-hosted runners, which have normal internet access —
+# unlike the Claude Code web sandbox, they can reach api.scrapecreators.com and
+# Supabase.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   SCRAPECREATORS_API_KEY   your ScrapeCreators key
+#   SUPABASE_URL             https://<project-ref>.supabase.co
+#   SUPABASE_KEY             the service_role key
+#
+# The parquet files are written to the ephemeral runner only (staging); Supabase
+# is the persistent store, and its tables accumulate across weekly runs.
+
+on:
+  schedule:
+    # every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch:        # also runnable on demand from the Actions tab
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    env:
+      SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-scrapecreators.txt -r requirements-supabase.txt
+
+      - name: Ingest last week's videos (with replies)
+        # --since-days 8 gives a 1-day overlap so nothing slips through the gap
+        # between weekly runs; the upsert dedupes the overlap.
+        run: |
+          python src/loader.py --client emokid690 --all \
+            --since-days 8 --with-replies \
+            --comment-count 5000 --max-videos 100
+
+      - name: Sync to Supabase
+        run: python src/sync_supabase.py --client emokid690
+
+      - name: Summary
+        run: python src/query.py --client emokid690

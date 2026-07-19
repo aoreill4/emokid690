@@ -209,7 +209,43 @@ credits).
 Re-run `sync_supabase.py` after any loader run to push new/updated rows. Threaded
 replies come along automatically (`comments.parent_comment_id` points at the
 parent; top-level comments have it `null`), so you can reconstruct any thread
-with a self-join.
+with a self-join. The schema also declares a foreign key `comments.video_id →
+video.video_id`, so joins work in the SQL Editor *and* the API/Table-Editor
+relationship view.
+
+## Only recent posts (`--since-days`)
+
+With `--all`, limit ingestion to videos posted in the last N days — ideal for an
+incremental weekly pull:
+
+```bash
+python src/loader.py --client emokid690 --all --since-days 8 --with-replies
+```
+
+Older (and undated) videos are skipped; the profile is still scanned up to
+`--max-videos` so a pinned old video near the top doesn't hide newer ones. Only
+the in-window videos have their (credit-spending) comments fetched.
+
+## Automate: weekly GitHub Action
+
+[`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) runs
+the pipeline every Monday 08:00 UTC (and on-demand from the Actions tab): it pulls
+the previous week's videos + comments + replies and syncs them to Supabase.
+GitHub-hosted runners have normal internet, so they can reach ScrapeCreators and
+Supabase (the web sandbox can't).
+
+Set three repo secrets first — **Settings → Secrets and variables → Actions → New
+repository secret**:
+
+| Secret | Value |
+|---|---|
+| `SCRAPECREATORS_API_KEY` | your ScrapeCreators key |
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_KEY` | the Supabase **service_role** key |
+
+The runner's parquet is throwaway staging — Supabase is the store, and its tables
+accumulate across runs. Adjust the schedule (the `cron:` line) or the handle in
+the workflow file as needed.
 
 ## ⚠️ Where to run it: not in Claude Code on the web
 

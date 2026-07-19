@@ -26,7 +26,12 @@ create table if not exists video (
 
 create table if not exists comments (
     comment_id        text primary key,
-    video_id          text,
+    -- FK to video so SQL joins AND the PostgREST/Table-Editor relationship view
+    -- both work. sync_supabase upserts videos before comments, so the reference
+    -- is always satisfied. (If you created these tables before the FK existed,
+    -- add it with: alter table comments add constraint comments_video_fk
+    --   foreign key (video_id) references video(video_id) on delete cascade;)
+    video_id          text references video (video_id) on delete cascade,
     client            text,
     text              text,
     like_count        bigint,

@@ -18,6 +18,7 @@ import csv
 import os
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -140,21 +141,41 @@ async def ingest_all(
     max_videos: int,
     comment_count: int,
     include_replies: bool = False,
+    since_days: Optional[int] = None,
 ) -> list[dict]:
-    """Sweep a creator's recent videos, ingesting each with its comments."""
+    """Sweep a creator's recent videos, ingesting each with its comments.
+
+    ``since_days`` limits ingestion to videos posted within the last N days
+    (by video ``created_at``); older or undated videos are skipped. The profile
+    is still paginated up to ``max_videos`` so pinned/old videos near the top
+    don't hide newer ones — only the comment fetch (the credit-spending part)
+    is limited to in-window videos.
+    """
     video_path, comments_path = _paths_for(client)
     summaries: list[dict] = []
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=since_days)
+        if since_days is not None
+        else None
+    )
 
     async with fetcher as tt:
         video_ids: list[str] = []
+        skipped = 0
         async for raw_video in tt.iter_user_videos(handle, count=max_videos):
             row = schema.parse_video(raw_video, client)
             if row is None:
+                continue
+            if cutoff is not None and (row.created_at is None or row.created_at < cutoff):
+                skipped += 1
                 continue
             storage.upsert_parquet(
                 [row.as_record()], video_path, schema.VIDEO_COLUMNS, schema.VIDEO_PK
             )
             video_ids.append(row.video_id)
+        if cutoff is not None:
+            print(f"Window: {len(video_ids)} video(s) in the last {since_days} day(s); "
+                  f"skipped {skipped} older/undated.")
 
         for vid in video_ids:
             comment_rows = []
@@ -209,6 +230,10 @@ def main() -> None:
     parser.add_argument("--video-url", help="single video URL or id (vertical slice)")
     parser.add_argument("--all", action="store_true", help="sweep the creator's profile")
     parser.add_argument("--max-videos", type=int, default=30)
+    parser.add_argument("--since-days", type=int, default=None,
+                        help="with --all, only ingest videos posted in the last N "
+                             "days (older/undated videos are skipped). Ideal for a "
+                             "weekly cron: --since-days 8.")
     parser.add_argument("--comment-count", type=int, default=200,
                         help="max top-level comments per video")
     parser.add_argument("--with-replies", action="store_true",
@@ -252,7 +277,8 @@ def main() -> None:
     if args.all:
         results = asyncio.run(
             ingest_all(make_fetcher(args, handle), handle, handle,
-                       args.max_videos, args.comment_count, include_replies)
+                       args.max_videos, args.comment_count, include_replies,
+                       args.since_days)
         )
         print(f"Ingested {len(results)} videos for @{handle}:")
         for r in results:
