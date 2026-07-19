@@ -162,6 +162,7 @@ async def ingest_all(
     async with fetcher as tt:
         video_ids: list[str] = []
         skipped = 0
+        video_total = 0
         async for raw_video in tt.iter_user_videos(handle, count=max_videos):
             row = schema.parse_video(raw_video, client)
             if row is None:
@@ -169,13 +170,16 @@ async def ingest_all(
             if cutoff is not None and (row.created_at is None or row.created_at < cutoff):
                 skipped += 1
                 continue
-            storage.upsert_parquet(
+            video_total = storage.upsert_parquet(
                 [row.as_record()], video_path, schema.VIDEO_COLUMNS, schema.VIDEO_PK
             )
             video_ids.append(row.video_id)
         if cutoff is not None:
             print(f"Window: {len(video_ids)} video(s) in the last {since_days} day(s); "
                   f"skipped {skipped} older/undated.")
+        if video_ids:
+            print(f"Video table now {video_total} rows "
+                  f"({len(video_ids)} ingested this run).")
 
         for vid in video_ids:
             comment_rows = []
