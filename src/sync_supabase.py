@@ -85,6 +85,11 @@ def _clean_value(v):
 
     if isinstance(v, datetime):
         return v.isoformat()
+    # pandas stores an int column that has nulls as float64, so a count like 0
+    # arrives as 0.0 — which Postgres rejects for a bigint column. Coerce
+    # whole-number floats back to int (the schema has no genuine float columns).
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
     return v
 
 
