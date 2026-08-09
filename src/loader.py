@@ -22,13 +22,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from dotenv import load_dotenv
-
 # allow "python src/loader.py" and "python -m src.loader" both to work
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import schema  # noqa: E402
 import storage  # noqa: E402
+from _util import load_env_file  # noqa: E402
 
 # NOTE: the fetch backends are imported lazily in make_fetcher() — TikTokClient
 # pulls in TikTokApi/Playwright, which the ScrapeCreators path doesn't need, so
@@ -228,7 +227,7 @@ def make_fetcher(args: argparse.Namespace, handle: str) -> Any:
 
 
 def main() -> None:
-    load_dotenv(REPO_ROOT / ".env")
+    load_env_file(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="Pull TikTok data into parquet tables.")
     parser.add_argument("--client", required=True, help="client id in data/clients.csv")
     parser.add_argument("--video-url", help="single video URL or id (vertical slice)")

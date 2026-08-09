@@ -33,12 +33,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import schema  # noqa: E402
 import storage  # noqa: E402
+from _util import load_env_file  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHUNK = 500  # rows per upsert request (keeps payloads well under PostgREST limits)
@@ -167,7 +166,7 @@ def sync(client: str) -> None:
 
 
 def main() -> None:
-    load_dotenv(REPO_ROOT / ".env")
+    load_env_file(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="Sync parquet tables into Supabase.")
     parser.add_argument("--client", required=True, help="client id / handle")
     args = parser.parse_args()
