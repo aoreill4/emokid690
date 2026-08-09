@@ -220,6 +220,42 @@ transcript — a few cents for a full backfill on the default model
 (`claude-opus-4-8`; override with `--model`). Later phases match audience comments
 to these jokes and score sentiment to rank the best-performing bits.
 
+## Attribute comments to jokes (`src/attribute_jokes.py`)
+
+Match each comment to the joke it's reacting to → a `joke_comment` grain
+(`comment_id, joke_id, video_id, method, confidence, matched_text`). Two tiers,
+scoped per video (a comment on video X only matches jokes from video X):
+
+1. **Phrase** — the comment quotes a run of consecutive words from a joke's
+   text/punchline ("a wandering nose"). High confidence.
+2. **Keyword** — the comment shares a *distinctive* content word with a joke,
+   where "distinctive" means the word appears in ≤5% of all jokes across the
+   catalog (so "petsmart"/"wandering" count, "dog"/"park"/"day" don't).
+
+```bash
+python src/attribute_jokes.py --client emokid690
+```
+
+Pure Python, no API cost. Only comments that actually reference a bit get matched
+— generic reactions ("😭 so real") are left out by design; the output prints
+coverage (`Attributed N/M comments`). This is the join that powers the final
+ranking:
+
+```sql
+-- best-performing jokes (once comment sentiment is added)
+select j.joke_text, j.punchline,
+       count(*)                                   as mentions,
+       sum(coalesce(c.like_count, 0) + 1)         as weighted_reach
+from joke_comment jc
+join jokes j     using (joke_id)
+join comments c  on c.comment_id = jc.comment_id
+group by 1, 2
+order by weighted_reach desc;
+```
+
+(Sentiment scoring — weighting each comment by positive/negative reaction — is the
+next step; it slots into this same query.)
+
 ## Sync to Supabase (Postgres)
 
 Push the parquet tables into a Supabase database so you can query/join them in

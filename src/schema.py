@@ -270,6 +270,25 @@ JOKE_COLUMNS = list(JokeRow.__dataclass_fields__.keys())
 JOKE_PK = "joke_id"
 
 
+@dataclass
+class JokeCommentRow:
+    comment_id: str          # PK — each comment attributes to at most one joke
+    joke_id: str
+    video_id: str
+    client: str
+    method: Optional[str]    # "phrase" (quoted a line) or "keyword" (distinctive-word overlap)
+    confidence: Optional[float]
+    matched_text: Optional[str]  # the shared phrase or keywords, for interpretability
+    collected_at: datetime = field(default_factory=_now_utc)
+
+    def as_record(self) -> dict:
+        return asdict(self)
+
+
+JOKE_COMMENT_COLUMNS = list(JokeCommentRow.__dataclass_fields__.keys())
+JOKE_COMMENT_PK = "comment_id"
+
+
 def webvtt_to_text(vtt: str) -> str:
     """Flatten a WebVTT caption file into a clean plain-text transcript.
 

@@ -62,6 +62,17 @@ create table if not exists jokes (
     collected_at timestamptz
 );
 
+create table if not exists joke_comment (
+    comment_id  text primary key references comments (comment_id) on delete cascade,
+    joke_id     text references jokes (joke_id) on delete cascade,
+    video_id    text,
+    client      text,
+    method      text,             -- "phrase" or "keyword"
+    confidence  double precision,
+    matched_text text,
+    collected_at timestamptz
+);
+
 -- Helpful indexes for the common access patterns (join comments->video, thread
 -- reconstruction, and per-client filtering). No strict FK on comments.video_id
 -- so a comment can sync even if its video row hasn't been ingested yet.
@@ -72,3 +83,5 @@ create index if not exists comments_client_idx     on comments (client);
 create index if not exists transcript_client_idx   on transcript (client);
 create index if not exists jokes_video_id_idx       on jokes (video_id);
 create index if not exists jokes_client_idx         on jokes (client);
+create index if not exists joke_comment_joke_idx    on joke_comment (joke_id);
+create index if not exists joke_comment_video_idx   on joke_comment (video_id);

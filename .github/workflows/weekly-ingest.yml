@@ -54,6 +54,9 @@ jobs:
       - name: Segment transcripts into jokes (Claude API)
         run: python src/segment_jokes.py --client emokid690
 
+      - name: Attribute comments to jokes
+        run: python src/attribute_jokes.py --client emokid690
+
       - name: Sync to Supabase
         run: python src/sync_supabase.py --client emokid690
 
