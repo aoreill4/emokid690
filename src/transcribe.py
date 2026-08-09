@@ -22,12 +22,11 @@ import asyncio
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import schema  # noqa: E402
 import storage  # noqa: E402
+from _util import load_env_file  # noqa: E402
 from scrapecreators_client import ScrapeCreatorsClient  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -103,7 +102,7 @@ async def run(client: str, handle: str, refresh: bool, limit: int | None) -> Non
 
 
 def main() -> None:
-    load_dotenv(REPO_ROOT / ".env")
+    load_env_file(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="Fetch transcripts from TikTok captions.")
     parser.add_argument("--client", required=True, help="client id / handle")
     parser.add_argument("--refresh", action="store_true",

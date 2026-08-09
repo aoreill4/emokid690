@@ -25,12 +25,11 @@ import json
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import schema  # noqa: E402
 import storage  # noqa: E402
+from _util import load_env_file  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_PATH = REPO_ROOT / ".claude" / "skills" / "identify-jokes" / "SKILL.md"
@@ -169,7 +168,7 @@ def run(client: str, model: str, refresh: bool, limit: int | None) -> None:
 
 
 def main() -> None:
-    load_dotenv(REPO_ROOT / ".env")
+    load_env_file(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description="Segment transcripts into a jokes table.")
     parser.add_argument("--client", required=True, help="client id / handle")
     parser.add_argument("--model", default=DEFAULT_MODEL,
