@@ -253,8 +253,46 @@ group by 1, 2
 order by weighted_reach desc;
 ```
 
-(Sentiment scoring — weighting each comment by positive/negative reaction — is the
-next step; it slots into this same query.)
+## Comment sentiment (`src/score_sentiment.py`)
+
+Score each comment's reaction as a signed polarity in `[-1, 1]` (+ a
+positive/neutral/negative label) → a `comment_sentiment` grain. This turns the
+joke ranking from "most talked about" into "landed best."
+
+```bash
+python src/score_sentiment.py --client emokid690                 # default: VADER
+python src/score_sentiment.py --client emokid690 --method roberta  # transformer
+```
+
+- **`vader`** (default) — pure-Python, tuned for social text (emoji, caps, slang,
+  negation), instant, no heavy deps. Installed via `requirements-sentiment.txt`.
+- **`roberta`** — `cardiffnlp/twitter-roberta-base-sentiment-latest`; more
+  nuanced but needs `transformers` + `torch` (`pip install transformers torch`)
+  and downloads a model on first run.
+
+Incremental (skips comments already scored with the same method). `method` is
+stored per row, so you can A/B the two.
+
+### Best-performing jokes (the payoff)
+
+With attribution + sentiment in place, rank her bits by weighted audience
+reaction — each supporting comment weighted by its likes:
+
+```sql
+select j.joke_text, j.punchline,
+       count(*)                                              as mentions,
+       round(avg(s.sentiment)::numeric, 3)                   as avg_sentiment,
+       round(sum(s.sentiment * (coalesce(c.like_count, 0) + 1))::numeric, 1)
+                                                             as weighted_score
+from joke_comment jc
+join jokes j              using (joke_id)
+join comments c          on c.comment_id = jc.comment_id
+left join comment_sentiment s on s.comment_id = jc.comment_id
+-- optional: keep only high-confidence attributions
+-- where jc.confidence >= 0.7
+group by 1, 2
+order by weighted_score desc;
+```
 
 ## Sync to Supabase (Postgres)
 

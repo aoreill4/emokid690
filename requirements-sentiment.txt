@@ -1,0 +1,12 @@
+# Deps for comment sentiment scoring (src/score_sentiment.py), default method.
+#
+#   py -m pip install -r requirements-sentiment.txt
+#
+# The optional --method roberta backend additionally needs `transformers` and
+# `torch` (heavy) — install those separately only if you want it:
+#   py -m pip install transformers torch
+#
+vaderSentiment>=3.3.2
+pandas>=2.0.0
+pyarrow>=14.0.0
+python-dotenv>=1.0.0

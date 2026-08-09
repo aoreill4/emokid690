@@ -271,6 +271,24 @@ JOKE_PK = "joke_id"
 
 
 @dataclass
+class CommentSentimentRow:
+    comment_id: str          # PK
+    video_id: str
+    client: str
+    sentiment: Optional[float]   # signed polarity in [-1, 1] (negative..positive)
+    label: Optional[str]         # "positive" | "neutral" | "negative"
+    method: Optional[str]        # "vader" or "roberta"
+    collected_at: datetime = field(default_factory=_now_utc)
+
+    def as_record(self) -> dict:
+        return asdict(self)
+
+
+COMMENT_SENTIMENT_COLUMNS = list(CommentSentimentRow.__dataclass_fields__.keys())
+COMMENT_SENTIMENT_PK = "comment_id"
+
+
+@dataclass
 class JokeCommentRow:
     comment_id: str          # PK — each comment attributes to at most one joke
     joke_id: str
