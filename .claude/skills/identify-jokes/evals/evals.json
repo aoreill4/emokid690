@@ -1,0 +1,23 @@
+{
+  "skill_name": "identify-jokes",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Break this TikTok comedy transcript into its individual jokes and return the structured JSON:\n\nHey, I'm home. Oh, I can't wait to get this off, my collar burn is so bad. What did you do today? Did you go on a walk? Did you see anyone? Did you sniff her butt? Oh my god. I just need to get a drink. You know my friends go to that park. Roxy and Luna are there every single day. It just reminds me of our fight from last week when you came home smelling like the cat section at Petsmart. We've been together for 14 years. It feels important to mention that it's only two human years.",
+      "expected_output": "A JSON object with a premise (dog-as-romantic-partner) and ~4 jokes as distinct comedic beats (collar burn, sniff her butt/jealousy, Petsmart cheating accusation, dog-years), each with joke_index, joke_text keeping quotable wording, punchline, and theme. Intro/filler dropped.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Split this skit transcript into the jokes:\n\nSo I finally joined a gym. Day one, I walk in, and the guy at the front desk goes, 'Have you worked out before?' and I said, 'I carried all my groceries in one trip once.' He wrote something down. I think it was a wellness check. Anyway I get on the treadmill, set it to a brisk 2 miles an hour, that's a power walk for me, and this influencer next to me is sprinting like she's being chased by her sponsorships. I lasted four minutes. My smartwatch congratulated me on completing a workout. It was being sarcastic, I could tell.",
+      "expected_output": "premise about being wildly unfit at the gym; ~4 beats: 'groceries in one trip'/wellness check, 2 mph 'power walk', influencer 'chased by her sponsorships', smartwatch 'being sarcastic'. Each a distinct laugh with quotable joke_text.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Here's a transcript, pull out the jokes:\n\nOkay so today we're making a brown butter chocolate chip cookie. First you're going to brown your butter over medium heat until it smells nutty. Let it cool. Cream it with your sugars, add your eggs and vanilla, then fold in the flour and a lot of chocolate. Chill the dough overnight, it really matters. Bake at 350 for about eleven minutes. Sea salt on top. That's it.",
+      "expected_output": "A serious recipe with no comedic beats — should return an empty jokes array (premise noting it's a straight recipe), not invent jokes.",
+      "files": []
+    }
+  ]
+}

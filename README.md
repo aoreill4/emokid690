@@ -180,6 +180,113 @@ Inspect / verify the tables:
 python src/query.py --client emokid690
 ```
 
+## Transcripts (`src/transcribe.py`)
+
+Fill the `transcript` grain (`video_id, transcript, lang, source`) from **TikTok's
+own auto-captions** — free, no Whisper, no video download, no ffmpeg. It reads the
+video's caption (WebVTT) from the API, strips the timestamps, and stores clean
+plain text.
+
+```bash
+python src/transcribe.py --client emokid690            # only videos missing one
+python src/transcribe.py --client emokid690 --limit 5  # try a few first
+python src/transcribe.py --client emokid690 --refresh  # re-fetch all
+```
+
+It's incremental (skips videos already transcribed) and prints coverage
+(`transcribed N, no caption M`). Videos without a TikTok caption are reported as
+gaps; `source` records the origin (`tiktok_caption`) so a Whisper fallback could
+later fill gaps under a different source tag. Costs ~1 API credit per video (the
+caption download itself is free). Push to Supabase with `sync_supabase.py`.
+
+## Jokes (`src/segment_jokes.py`)
+
+Split each transcript into its individual **jokes** (comedic beats) via the Claude
+API, producing a `jokes` grain (`joke_id, video_id, joke_index, joke_text,
+punchline, theme`). The prompt lives in the
+[`identify-jokes` skill](.claude/skills/identify-jokes/SKILL.md) — the script uses
+that `SKILL.md` as its system prompt, so tuning the skill (invoke it interactively
+to iterate) automatically changes what the pipeline produces.
+
+```bash
+python src/segment_jokes.py --client emokid690 --limit 3   # try a few first
+python src/segment_jokes.py --client emokid690             # all transcripts
+python src/segment_jokes.py --client emokid690 --refresh   # redo all
+```
+
+Add an `ANTHROPIC_API_KEY` to `.env` (platform.claude.com → API keys). It's
+incremental (skips videos already segmented) and costs one Claude call per
+transcript — a few cents for a full backfill on the default model
+(`claude-opus-4-8`; override with `--model`). Later phases match audience comments
+to these jokes and score sentiment to rank the best-performing bits.
+
+## Sync to Supabase (Postgres)
+
+Push the parquet tables into a Supabase database so you can query/join them in
+SQL and build dashboards. Ingestion stays parquet-based; this is a separate,
+idempotent step (upsert by primary key — safe to re-run, never re-spends fetch
+credits).
+
+1. **Create the tables once.** In your Supabase project → SQL Editor → paste and
+   run [`db/supabase_schema.sql`](db/supabase_schema.sql). It creates `video` and
+   `comments` typed to match the parquet, with the right primary keys.
+2. **Add credentials** to `.env` (Supabase dashboard → Project Settings → API):
+
+   ```
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_KEY=<service_role key>
+   ```
+
+   Use the **service_role** key (not anon) so writes aren't blocked by row-level
+   security. It's gitignored via `.env` — never commit it.
+3. **Install and sync:**
+
+   ```bash
+   python3 -m pip install -r requirements-supabase.txt
+   python src/sync_supabase.py --client emokid690
+   ```
+
+Re-run `sync_supabase.py` after any loader run to push new/updated rows. Threaded
+replies come along automatically (`comments.parent_comment_id` points at the
+parent; top-level comments have it `null`), so you can reconstruct any thread
+with a self-join. The schema also declares a foreign key `comments.video_id →
+video.video_id`, so joins work in the SQL Editor *and* the API/Table-Editor
+relationship view.
+
+## Only recent posts (`--since-days`)
+
+With `--all`, limit ingestion to videos posted in the last N days — ideal for an
+incremental weekly pull:
+
+```bash
+python src/loader.py --client emokid690 --all --since-days 8 --with-replies
+```
+
+Older (and undated) videos are skipped; the profile is still scanned up to
+`--max-videos` so a pinned old video near the top doesn't hide newer ones. Only
+the in-window videos have their (credit-spending) comments fetched.
+
+## Automate: weekly GitHub Action
+
+[`.github/workflows/weekly-ingest.yml`](.github/workflows/weekly-ingest.yml) runs
+the pipeline every Monday 08:00 UTC (and on-demand from the Actions tab): it pulls
+the previous week's videos + comments + replies and syncs them to Supabase.
+GitHub-hosted runners have normal internet, so they can reach ScrapeCreators and
+Supabase (the web sandbox can't).
+
+Set three repo secrets first — **Settings → Secrets and variables → Actions → New
+repository secret**:
+
+| Secret | Value |
+|---|---|
+| `SCRAPECREATORS_API_KEY` | your ScrapeCreators key |
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_KEY` | the Supabase **service_role** key |
+
+The runner's parquet is throwaway staging — Supabase is the store, and its tables
+accumulate across runs. Adjust the schedule (the `cron:` line) or the handle in
+the workflow file as needed.
+
 ## ⚠️ Where to run it: not in Claude Code on the web
 
 Either backend needs outbound network access that **the hosted/web sandbox
