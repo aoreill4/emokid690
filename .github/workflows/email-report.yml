@@ -6,9 +6,9 @@ name: Email report
 # and can also be run on demand from the Actions tab.
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
-#   SUPABASE_DB_URL      Postgres URI — Supabase → Project Settings → Database →
-#                        Connection string → URI. Use the POOLER URI (port 6543)
-#                        so it works from Actions (IPv4).
+#   SUPABASE_DB_URL      Postgres URI — Supabase → Connect → "Session pooler" →
+#                        URI (port 5432 on ...pooler.supabase.com). IPv4, so it
+#                        works from Actions. Avoid the IPv6-only Direct connection.
 #   GMAIL_USER           the Gmail address to send from
 #   GMAIL_APP_PASSWORD   a Google App Password (not your login password)
 #   EMAIL_TO             recipient(s), comma-separated (optional; defaults to GMAIL_USER)

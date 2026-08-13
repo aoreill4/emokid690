@@ -8,11 +8,13 @@ folder — no code change needed.
 
 Secrets (GitHub Actions repo secrets, or ``.env`` locally)
 ----------------------------------------------------------
-    SUPABASE_DB_URL     Postgres connection URI. Supabase dashboard →
-                        Project Settings → Database → "Connection string" → URI.
-                        Use the **connection pooler** URI (port 6543) so it works
-                        from GitHub Actions (IPv4). Looks like:
-                        postgresql://postgres.<ref>:<pw>@<host>:6543/postgres
+    SUPABASE_DB_URL     Postgres connection URI. Supabase dashboard → Connect →
+                        "Session pooler" → URI. The session pooler (port 5432 on
+                        the ...pooler.supabase.com host) is IPv4 so it works from
+                        GitHub Actions, and keeps the session read-only flag this
+                        script sets. Looks like:
+                        postgresql://postgres.<ref>:<pw>@<host>:5432/postgres
+                        (Avoid the IPv6-only "Direct connection".)
     GMAIL_USER          the Gmail address to send from
     GMAIL_APP_PASSWORD  a Google **App Password** (Google Account → Security →
                         2-Step Verification → App passwords). NOT your login
