@@ -1,0 +1,9 @@
+# Deps for the weekly email report (src/email_report.py).
+#
+#   py -m pip install -r requirements-email.txt
+#
+# Email sending uses the standard-library smtplib (Gmail SMTP) — no dep needed.
+# psycopg2 is only for running the src/sql/ SELECTs against Supabase Postgres.
+#
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
