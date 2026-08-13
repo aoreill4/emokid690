@@ -260,27 +260,18 @@ positive/neutral/negative label) → a `comment_sentiment` grain. This turns the
 joke ranking from "most talked about" into "landed best."
 
 ```bash
-python src/score_sentiment.py --client emokid690                 # default: Claude
-python src/score_sentiment.py --client emokid690 --method vader  # lexicon fallback
+python src/score_sentiment.py --client emokid690                 # default: VADER
 python src/score_sentiment.py --client emokid690 --method roberta  # transformer
 ```
 
-- **`claude`** (default) — the Claude API with a domain-aware prompt. It reads
-  *intent* in the internet-comedy register: 😭/💀 mean "hilarious" (not sad),
-  profanity is emphasis/praise, playful insults are affection, sarcasm counts.
-  Batched (40 comments/call) so it's cheap. Needs `ANTHROPIC_API_KEY` (same key
-  as the jokes step). Override the model with `--model` (default
-  `claude-sonnet-5`; bump to opus for max nuance, drop to haiku for max thrift).
-- **`vader`** — pure-Python lexicon. Fast and free, but tuned for product/movie
-  reviews: it reads 😭 as "sob" and profanity as hostile, so it *inverts* on
-  comedy comments (marking "so fucking funny 😭😭" as negative). Fallback only.
-- **`roberta`** — `cardiffnlp/twitter-roberta-base-sentiment-latest`; better than
-  VADER on tweets but needs `transformers` + `torch` (`pip install transformers
-  torch`) and downloads a model on first run.
+- **`vader`** (default) — pure-Python, tuned for social text (emoji, caps, slang,
+  negation), instant, no heavy deps. Installed via `requirements-sentiment.txt`.
+- **`roberta`** — `cardiffnlp/twitter-roberta-base-sentiment-latest`; more
+  nuanced but needs `transformers` + `torch` (`pip install transformers torch`)
+  and downloads a model on first run.
 
 Incremental (skips comments already scored with the same method). `method` is
-stored per row, and the parquet is keyed by `comment_id`, so switching methods
-overwrites a comment's prior score instead of duplicating it.
+stored per row, so you can A/B the two.
 
 ### Best-performing jokes (the payoff)
 
