@@ -284,23 +284,31 @@ overwrites a comment's prior score instead of duplicating it.
 
 ### Best-performing jokes (the payoff)
 
-With attribution + sentiment in place, rank her bits by weighted audience
-reaction — each supporting comment weighted by its likes:
+With attribution + sentiment in place, rank her bits by total audience
+engagement — likes + replies across every high-confidence comment attributed to
+each joke. `avg_sentiment` rides along as a "how did people feel" readout, and
+`num_comments` is the distinct-text mention count (so copypasta doesn't inflate a
+joke). Only attributions with `confidence > 0.7` are counted.
 
 ```sql
-select j.joke_text, j.punchline,
-       count(*)                                              as mentions,
-       round(avg(s.sentiment)::numeric, 3)                   as avg_sentiment,
-       round(sum(s.sentiment * (coalesce(c.like_count, 0) + 1))::numeric, 1)
-                                                             as weighted_score
+select
+  v.caption                                              as video,
+  j.joke_text,
+  jc.joke_id,
+  j.punchline,
+  round(avg(s.sentiment)::numeric, 3)                    as avg_sentiment,
+  count(distinct c.text)                                 as num_comments,
+  sum(coalesce(c.reply_count, 0))                        as reply_count,
+  sum(coalesce(c.like_count, 0))                         as total_likes,
+  sum(coalesce(c.like_count, 0) + coalesce(c.reply_count, 0)) as engagement_score
 from joke_comment jc
-join jokes j              using (joke_id)
-join comments c          on c.comment_id = jc.comment_id
+join jokes j            using (joke_id)
+join comments c        on c.comment_id = jc.comment_id
+join video v           on v.video_id   = j.video_id
 left join comment_sentiment s on s.comment_id = jc.comment_id
--- optional: keep only high-confidence attributions
--- where jc.confidence >= 0.7
-group by 1, 2
-order by weighted_score desc;
+where jc.confidence > 0.7
+group by v.caption, j.joke_text, j.punchline, jc.joke_id
+order by engagement_score desc;
 ```
 
 ## Sync to Supabase (Postgres)
