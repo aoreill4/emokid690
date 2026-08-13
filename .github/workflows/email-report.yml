@@ -1,0 +1,45 @@
+name: Email report
+
+# Runs every .sql query in src/sql/ against Supabase and emails an HTML report
+# (src/email_report.py). Fires automatically after the "TikTok pipeline"
+# workflow completes successfully, so the report reflects the freshest data —
+# and can also be run on demand from the Actions tab.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL      Postgres URI — Supabase → Project Settings → Database →
+#                        Connection string → URI. Use the POOLER URI (port 6543)
+#                        so it works from Actions (IPv4).
+#   GMAIL_USER           the Gmail address to send from
+#   GMAIL_APP_PASSWORD   a Google App Password (not your login password)
+#   EMAIL_TO             recipient(s), comma-separated (optional; defaults to GMAIL_USER)
+
+on:
+  workflow_run:
+    workflows: ["TikTok pipeline"]   # must match the name: in pipeline.yml
+    types: [completed]
+  workflow_dispatch:                 # manual "Run workflow" button
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    # Send only when the pipeline actually succeeded — or on a manual run.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-email.txt
+
+      - name: Send report
+        run: python src/email_report.py --client emokid690

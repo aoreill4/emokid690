@@ -1,17 +1,19 @@
-name: Weekly TikTok ingest
+name: TikTok pipeline
 
-# Pulls the previous week's videos (with comments + replies) and syncs them to
-# Supabase. Runs on GitHub-hosted runners, which have normal internet access —
-# unlike the Claude Code web sandbox, they can reach api.scrapecreators.com and
-# Supabase.
+# Weekly ingest orchestration: pulls the past week's videos (with comments +
+# replies), transcribes them from TikTok captions, segments transcripts into
+# jokes, attributes comments to jokes, scores sentiment, and syncs everything to
+# Supabase. GitHub-hosted runners have normal internet access (unlike the Claude
+# Code sandbox), so they can reach api.scrapecreators.com and Supabase.
 #
-# Required repo secrets (Settings -> Secrets and variables -> Actions):
+# The email report is a SEPARATE workflow (email-report.yml) that fires
+# automatically after this one succeeds.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
 #   SCRAPECREATORS_API_KEY   your ScrapeCreators key
 #   SUPABASE_URL             https://<project-ref>.supabase.co
 #   SUPABASE_KEY             the service_role key
-#
-# The parquet files are written to the ephemeral runner only (staging); Supabase
-# is the persistent store, and its tables accumulate across weekly runs.
+#   ANTHROPIC_API_KEY        for the joke-segmentation step (Claude API)
 
 on:
   schedule:
@@ -20,18 +22,13 @@ on:
   workflow_dispatch:        # also runnable on demand from the Actions tab
 
 jobs:
-  ingest:
+  pipeline:
     runs-on: ubuntu-latest
     env:
       SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      # Email report (src/email_report.py)
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      GMAIL_USER: ${{ secrets.GMAIL_USER }}
-      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      EMAIL_TO: ${{ secrets.EMAIL_TO }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,8 +40,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-scrapecreators.txt -r requirements-supabase.txt \
-                      -r requirements-jokes.txt -r requirements-sentiment.txt \
-                      -r requirements-email.txt
+                      -r requirements-jokes.txt -r requirements-sentiment.txt
 
       - name: Ingest last week's videos (with replies)
         # --since-days 8 gives a 1-day overlap so nothing slips through the gap
@@ -71,7 +67,3 @@ jobs:
 
       - name: Summary
         run: python src/query.py --client emokid690
-
-      - name: Email weekly report
-        # Runs every .sql in src/sql/ against Supabase and emails an HTML report.
-        run: python src/email_report.py --client emokid690
