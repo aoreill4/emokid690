@@ -115,11 +115,19 @@ def build_report(client: str) -> tuple[str, str, int]:
         raise SystemExit("psycopg2 not installed. Run: "
                          "python3 -m pip install -r requirements-email.txt")
 
-    db_url = os.getenv("SUPABASE_DB_URL")
+    db_url = (os.getenv("SUPABASE_DB_URL") or "").strip().strip('"').strip("'")
     if not db_url:
         raise SystemExit(
-            "Missing SUPABASE_DB_URL. Supabase dashboard → Project Settings → "
-            "Database → Connection string → URI (use the pooler URI, port 6543)."
+            "Missing SUPABASE_DB_URL. Supabase dashboard → Connect → "
+            "Session pooler → URI (port 5432)."
+        )
+    if not db_url.startswith(("postgresql://", "postgres://")):
+        raise SystemExit(
+            "SUPABASE_DB_URL must be the full connection URI starting with "
+            "'postgresql://' — not just the password, and not the 'Connection "
+            "parameters' block. Copy the Session pooler URI from Supabase → "
+            "Connect, paste it as one line with no surrounding quotes:\n"
+            "  postgresql://postgres.<ref>:<password>@<host>:5432/postgres"
         )
 
     sql_files = sorted(SQL_DIR.glob("*.sql"))
