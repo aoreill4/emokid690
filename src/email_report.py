@@ -173,12 +173,15 @@ def build_report(client: str) -> tuple[str, str, int]:
 
 
 def send_email(subject: str, html_body: str) -> None:
-    user = os.getenv("GMAIL_USER")
-    password = os.getenv("GMAIL_APP_PASSWORD")
+    user = (os.getenv("GMAIL_USER") or "").strip()
+    # Google shows the 16-char App Password in 4 space-separated groups; SMTP wants
+    # it with no spaces. A regular account password will be rejected by Gmail.
+    password = (os.getenv("GMAIL_APP_PASSWORD") or "").replace(" ", "")
     if not user or not password:
         raise SystemExit(
             "Missing GMAIL_USER / GMAIL_APP_PASSWORD. Create a Google App Password "
-            "(Google Account → Security → 2-Step Verification → App passwords)."
+            "(Google Account → Security → 2-Step Verification → App passwords) — "
+            "your normal Gmail password will not work for SMTP."
         )
     recipients = [r.strip() for r in (os.getenv("EMAIL_TO") or user).split(",") if r.strip()]
 
